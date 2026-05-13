@@ -12,3 +12,5 @@
 - Added dry-run mutation preparation and policy-gated commit flow.
 - Added credential-safe client, audit logging, tests, stdio transport, and
   Streamable HTTP transport.
+- Included Apache-2.0 licensing, `SECURITY.md`, CI, Dependabot, package publish
+  allowlisting, and hardened HTTP defaults from the initial release.
