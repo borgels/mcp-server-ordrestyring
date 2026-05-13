@@ -1,0 +1,61 @@
+{
+  "name": "mcp-server-ordrestyring",
+  "version": "0.1.0",
+  "description": "Policy-aware MCP server for the Ordrestyring GraphQL API.",
+  "type": "module",
+  "main": "./dist/stdio.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    ".env.example"
+  ],
+  "bin": {
+    "mcp-server-ordrestyring": "./dist/stdio.js"
+  },
+  "scripts": {
+    "build": "tsup src/transports/stdio.ts src/transports/http.ts --format esm --dts --clean --sourcemap",
+    "dev": "tsx src/transports/stdio.ts",
+    "dev:http": "tsx src/transports/http.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run typecheck && npm test && npm run build",
+    "smoke:live": "tsx test/live-smoke.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Borgels/mcp-server-ordrestyring.git"
+  },
+  "keywords": [
+    "mcp",
+    "ordrestyring",
+    "graphql",
+    "case-management"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bugs": {
+    "url": "https://github.com/Borgels/mcp-server-ordrestyring/issues"
+  },
+  "homepage": "https://github.com/Borgels/mcp-server-ordrestyring#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
+  },
+  "overrides": {
+    "ip-address": ">=10.1.1",
+    "hono": ">=4.12.16",
+    "fast-uri": ">=3.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}
