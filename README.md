@@ -88,7 +88,9 @@ During development:
 
 Ask the MCP client to call:
 
+- `ordrestyring_diagnostics` to verify credentials and live schema coverage.
 - `ordrestyring_search_capabilities` to find tools and examples.
+- `ordrestyring_get_capability` to inspect one tool before using it.
 - `ordrestyring_check_connection` to verify credentials.
 - `ordrestyring_search_schema` to find API fields before using a focused tool.
 
@@ -103,7 +105,10 @@ when the API does not expose a required workflow field.
 ### Discovery
 
 - `ordrestyring_search_capabilities` — search this MCP server's capabilities.
+- `ordrestyring_get_capability` — inspect one discovered capability.
 - `ordrestyring_check_connection` — verify the configured API token.
+- `ordrestyring_diagnostics` — check auth, schema counts, and workflow field
+  availability.
 - `ordrestyring_introspect_schema` — fetch top-level Query and Mutation fields.
 - `ordrestyring_search_schema` — search GraphQL types, fields, and arguments.
 - `ordrestyring_get_schema_type` — inspect one GraphQL type by exact name.
@@ -128,12 +133,19 @@ when the API does not expose a required workflow field.
   scalar fields and related customer/user fields where available.
 - `ordrestyring_search_customers` — schema-aware customer list/search.
 - `ordrestyring_get_customer_overview` — schema-aware customer detail by id.
+- `ordrestyring_search_creditors` — schema-aware supplier/creditor
+  list/search by name, number, or VAT number.
+- `ordrestyring_get_creditor` — supplier/creditor detail by creditor number.
+- `ordrestyring_search_products` — product/item list/search by number,
+  description, and product type.
+- `ordrestyring_get_product` — product/item detail by id.
+- `ordrestyring_search_hour_types` — hour types with linked time products.
 
 ```json
 {
   "query": "service",
   "customerId": 456,
-  "status": "open",
+  "statusId": 7,
   "limit": 20
 }
 ```
@@ -154,6 +166,23 @@ when the API does not expose a required workflow field.
 - `ordrestyring_list_case_quality_checks` — KS/checklist/form status by case.
 - `ordrestyring_list_invoice_drafts` — invoice draft/pipeline records only; no
   send, book, export, or accounting mutation.
+- `ordrestyring_get_case_activity` — case activities and status history.
+- `ordrestyring_find_billable_cases` — find cases that look ready for billing
+  review.
+- `ordrestyring_get_case_work_summary` — combined hours/materials summary for a
+  case.
+- `ordrestyring_get_case_health` — case overview, activity, work, documents,
+  quality checks, and billing readiness in one response.
+- `ordrestyring_find_stale_cases` — find cases not updated for a configurable
+  number of days.
+- `ordrestyring_get_invoice_readiness` — case overview, uninvoiced work,
+  existing drafts, and financials for billing review.
+- `ordrestyring_get_billing_pipeline` — sales invoice drafts and invoices for
+  pipeline review.
+- `ordrestyring_get_unbilled_work_report` — summarize uninvoiced hours and
+  materials.
+- `ordrestyring_get_operational_model` — show the recommended
+  Ordrestyring/e-conomic ownership boundary and live mutation coverage.
 - `ordrestyring_get_business_report` — report wrapper for `hours`, `materials`,
   `case_profitability`, and `invoice_pipeline`.
 
@@ -165,6 +194,38 @@ Example:
   "dateFrom": "2026-01-01",
   "dateTo": "2026-01-31",
   "limit": 100
+}
+```
+
+### Operational Writes
+
+These tools create or convert operational records directly when writes are
+enabled and policy allows the underlying mutation:
+
+- `ordrestyring_create_customer`
+- `ordrestyring_create_case`
+- `ordrestyring_create_case_activity`
+- `ordrestyring_create_offer`
+- `ordrestyring_convert_offer_to_case`
+- `ordrestyring_create_product`
+- `ordrestyring_update_product`
+- `ordrestyring_delete_products`
+- `ordrestyring_create_hour_type`
+- `ordrestyring_update_hour_type`
+- `ordrestyring_create_case_material`
+- `ordrestyring_create_sales_invoice_draft`
+- `ordrestyring_create_creditor`
+
+Example:
+
+```json
+{
+  "input": {
+    "customerId": 123,
+    "description": "Udskiftning af pumpe"
+  },
+  "reason": "Customer requested an offer.",
+  "idempotencyKey": "offer-123-pump-2026-05-25"
 }
 ```
 
@@ -207,15 +268,27 @@ Example policy:
 
 Write flow:
 
-1. Call `ordrestyring_prepare_mutation` with the mutation, variables, and a
-   business reason.
-2. Inspect the returned `preparedMutation`, `mutationNames`, and `operationHash`.
-3. Call `ordrestyring_commit_prepared_mutation` with the full prepared mutation,
-   matching `confirmOperationHash`, and an `idempotencyKey`.
+1. Prefer a focused direct tool such as `ordrestyring_create_offer` or
+   `ordrestyring_create_case`.
+2. For advanced/debug flows, call `ordrestyring_prepare_mutation` or
+   `ordrestyring_prepare_operational_mutation`, inspect the returned
+   `operationHash`, then call `ordrestyring_commit_prepared_mutation`.
+3. Keep `allowedMutations` narrow in the policy file, for example
+   `["createOffer", "createCase"]` while testing.
 
 `idempotencyKey` is stored only as a hash in the audit log. Ordrestyring's public
 GraphQL docs do not document an idempotency header, so this server does not send
 one upstream.
+
+### Ordrestyring And e-conomic
+
+The recommended ownership boundary is: Ordrestyring owns daily operations
+(offers, cases/orders, planning, time/materials, documentation, KS, and invoice
+draft readiness), while e-conomic stays the financial ledger for accounts, VAT,
+booked invoices, payments, reconciliation, and accounting reports. Ordrestyring
+publishes an e-conomic integration, so prefer the product integration for routine
+sync and use MCP tools for governed inspection, preparation, and exception
+handling.
 
 ## Security And Audit
 
@@ -277,10 +350,19 @@ token:
 ORDRESTYRING_API_TOKEN="your-api-token" npm run smoke:live
 ```
 
+After `npm run build`, run the MCP stdio smoke test to verify the packaged
+server registers tools and can call Ordrestyring through MCP:
+
+```sh
+ORDRESTYRING_API_TOKEN="your-api-token" npm run smoke:mcp
+```
+
 ## API Sources
 
 - GraphQL docs: <https://graphql.ordrestyring.dk/docs>
 - GraphiQL UI: <https://graphql.ordrestyring.dk/graphiql>
+- Ordrestyring e-conomic integration: <https://ordrestyring.dk/integrationspartnere/e-conomic/>
+- e-conomic app listing for Ordrestyring: <https://www.e-conomic.dk/apps-og-udvidelser/ordrestyringdk>
 - Legacy REST API notice: <https://api.ordrestyring.dk/>
 
 ## License

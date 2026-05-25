@@ -4,6 +4,7 @@ import { formatUnknownError } from '../errors.js';
 import { writeAuditEvent } from '../ordrestyring/audit.js';
 import {
   DRY_RUN_TOOL_ANNOTATIONS,
+  getCapability,
   READ_TOOL_ANNOTATIONS,
   searchCapabilities,
   WRITE_TOOL_ANNOTATIONS,
@@ -24,8 +25,12 @@ import { checkMutationPolicy, checkToolPolicy } from '../ordrestyring/policy.js'
 import {
   getSchemaCatalog,
   getSchemaType,
+  isScalarLike,
+  namedTypeName,
   refreshSchemaCatalog,
   searchSchema,
+  selectionForType,
+  typeRefToString,
 } from '../ordrestyring/schema.js';
 
 const variablesSchema = z.record(z.string(), z.unknown()).default({});
@@ -41,6 +46,27 @@ const dateRangeInputShape = {
   dateFrom: isoDateSchema.optional(),
   dateTo: isoDateSchema.optional(),
 };
+const operationalMutationSchema = z.enum([
+  'create_customer',
+  'create_case',
+  'create_case_activity',
+  'create_offer',
+  'convert_offer_to_case',
+  'create_product',
+  'update_product',
+  'delete_products',
+  'create_hour_type',
+  'update_hour_type',
+  'create_case_material',
+  'create_sales_invoice_draft',
+  'create_creditor',
+]);
+const operationalInputSchema = z.record(z.string(), z.unknown()).default({});
+const idempotencyKeySchema = z
+  .string()
+  .trim()
+  .min(8)
+  .describe('Audited caller-provided key. Ordrestyring does not document an idempotency header.');
 
 const preparedMutationSchema = z.object({
   type: z.literal('ordrestyring_prepared_mutation'),
@@ -88,33 +114,79 @@ const customerPreferredScalars = [
   'createdAt',
   'updatedAt',
 ];
+const creditorPreferredScalars = [
+  'id',
+  'number',
+  'name',
+  'address',
+  'postalCode',
+  'city',
+  'vatNumber',
+  'vatZone',
+  'createdAt',
+  'locked',
+  'isAccessible',
+  'transferToInventoryProvider',
+  'gln',
+];
+const productPreferredScalars = [
+  'id',
+  'number',
+  'description',
+  'isHour',
+  'costPrice',
+  'listPrice',
+  'createdAt',
+  'updatedAt',
+];
+const hourTypePreferredScalars = [
+  'id',
+  'name',
+  'requireCase',
+  'color',
+  'salaryHandle',
+  'sortOrder',
+];
 const timePreferredScalars = [
   'id',
   'caseId',
   'userId',
   'employeeId',
-  'date',
+  'startTime',
+  'stopTime',
   'description',
   'hours',
+  'billableHours',
+  'totalHours',
   'minutes',
   'duration',
   'quantity',
   'billable',
+  'costPrice',
+  'salesPrice',
+  'isAddedToInvoiceDraft',
+  'status',
   'createdAt',
   'updatedAt',
 ];
 const materialPreferredScalars = [
   'id',
   'caseId',
-  'date',
+  'addedDate',
+  'materialDate',
   'name',
   'description',
+  'productNumber',
   'quantity',
   'unit',
   'unitPrice',
   'price',
   'cost',
+  'costPrice',
+  'salesPrice',
   'total',
+  'isAddedToInvoiceDraft',
+  'type',
   'createdAt',
   'updatedAt',
 ];
@@ -169,7 +241,35 @@ const invoicePreferredScalars = [
   'dueDate',
   'amount',
   'total',
+  'totalSalesPrice',
   'vat',
+  'currency',
+  'invoiceDate',
+  'createdAt',
+  'updatedAt',
+];
+const activityPreferredScalars = [
+  'id',
+  'caseId',
+  'type',
+  'title',
+  'description',
+  'comment',
+  'status',
+  'createdAt',
+  'updatedAt',
+  'changedAt',
+];
+const salesInvoicePreferredScalars = [
+  'id',
+  'invoiceNumber',
+  'caseId',
+  'customerId',
+  'status',
+  'date',
+  'dueDate',
+  'total',
+  'totalSalesPrice',
   'currency',
   'createdAt',
   'updatedAt',
@@ -183,6 +283,34 @@ const caseNestedPreferred = {
 };
 const customerNestedPreferred = {
   address: ['id', 'address', 'postalCode', 'city'],
+};
+const creditorNestedPreferred = {
+  supplier: ['id', 'name'],
+  purchaseAccount: ['id', 'number', 'name'],
+  currency: ['id', 'code', 'name'],
+  paymentTerm: ['id', 'name'],
+  country: ['id', 'code', 'name'],
+  economyTransferState: ['id', 'state', 'status'],
+};
+const productNestedPreferred = {
+  account: ['number', 'name'],
+};
+const hourTypeNestedPreferred = {
+  product: productPreferredScalars,
+};
+const timeNestedPreferred = {
+  case: ['id', 'caseNumber', 'description'],
+  user: ['id', 'name', 'email'],
+  type: ['id', 'name'],
+};
+const materialNestedPreferred = {
+  case: ['id', 'caseNumber', 'description'],
+  createdBy: ['id', 'name', 'email'],
+  supplier: ['id', 'name'],
+};
+const invoiceNestedPreferred = {
+  case: ['id', 'caseNumber', 'description'],
+  customer: customerPreferredScalars,
 };
 
 export function registerOrdrestyringTools(server: McpServer, client: OrdrestyringClient): void {
@@ -245,6 +373,22 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
   );
 
   server.registerTool(
+    'ordrestyring_get_capability',
+    {
+      title: 'Get Ordrestyring Capability',
+      description: 'Return details for one discovered Ordrestyring capability.',
+      inputSchema: {
+        id: z.string().trim().min(1),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_capability', input, async () =>
+        jsonToolResult(getCapability(input.id) ?? { error: `Unknown capability: ${input.id}` }),
+      ),
+  );
+
+  server.registerTool(
     'ordrestyring_search_schema',
     {
       title: 'Search Ordrestyring GraphQL Schema',
@@ -300,6 +444,59 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
           typeCount: catalog.types.length,
           queryFieldCount: catalog.queryFields.length,
           mutationFieldCount: catalog.mutationFields.length,
+        });
+      }),
+  );
+
+  server.registerTool(
+    'ordrestyring_diagnostics',
+    {
+      title: 'Ordrestyring Diagnostics',
+      description:
+        'Check authentication and summarize live schema counts and important workflow fields.',
+      inputSchema: {},
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_diagnostics', input, async () => {
+        const connection = await client.graphql<{ __typename: string }>({
+          query: 'query OrdrestyringMcpDiagnosticsConnection { __typename }',
+        });
+        const catalog = await getSchemaCatalog(client);
+        const queryFieldNames = new Set(catalog.queryFields.map(field => field.name));
+        const mutationFieldNames = new Set(catalog.mutationFields.map(field => field.name));
+        const expectedQueryFields = [
+          'cases',
+          'customers',
+          'hours',
+          'caseMaterials',
+          'salesInvoiceDrafts',
+          'salesInvoices',
+          'caseFinanceAggregate',
+          'caseActivities',
+          'caseStatusHistory',
+        ];
+
+        return jsonToolResult({
+          ok: true,
+          typename: connection.__typename,
+          schema: {
+            queryTypeName: catalog.queryTypeName,
+            mutationTypeName: catalog.mutationTypeName,
+            typeCount: catalog.types.length,
+            queryFieldCount: catalog.queryFields.length,
+            mutationFieldCount: catalog.mutationFields.length,
+          },
+          queryFields: Object.fromEntries(
+            expectedQueryFields.map(field => [field, queryFieldNames.has(field)]),
+          ),
+          writes: {
+            enabled: process.env.ORDRESTYRING_ENABLE_WRITES === 'true',
+            mutationCount: mutationFieldNames.size,
+          },
+          warnings: expectedQueryFields
+            .filter(field => !queryFieldNames.has(field))
+            .map(field => `Live schema does not expose expected query field: ${field}`),
         });
       }),
   );
@@ -384,6 +581,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
         ...paginationInputShape,
         query: z.string().trim().min(1).optional(),
         status: z.string().trim().min(1).optional(),
+        statusId: z.number().int().positive().optional(),
         customerId: z.number().int().positive().optional(),
         updatedFrom: isoDateSchema.optional(),
         updatedTo: isoDateSchema.optional(),
@@ -403,6 +601,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
               preferredScalars: casePreferredScalars,
               nestedPreferred: caseNestedPreferred,
               defaultOrderByField: 'updatedAt',
+              searchFields: ['caseNumber', 'description'],
             },
             input,
           ),
@@ -497,6 +696,129 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
   );
 
   server.registerTool(
+    'ordrestyring_search_creditors',
+    {
+      title: 'Search Ordrestyring Creditors',
+      description:
+        'Search or list supplier/creditor master data in Ordrestyring by name, number, or VAT number.',
+      inputSchema: {
+        page: z.number().int().positive().default(1),
+        cursor: z.string().trim().min(1).optional(),
+        limit: z.number().int().min(1).max(500).default(20),
+        query: z.string().trim().min(1).optional(),
+        orderByField: z.string().trim().min(1).optional(),
+        orderDirection: z.enum(['ASC', 'DESC']).default('ASC'),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_search_creditors', input, async () =>
+        jsonToolResult(await readCreditors(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_creditor',
+    {
+      title: 'Get Ordrestyring Creditor',
+      description: 'Fetch supplier/creditor master data by creditor number.',
+      inputSchema: {
+        number: z.string().trim().min(1),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_creditor', input, async () =>
+        jsonToolResult(
+          await readDomainEntity(
+            client,
+            {
+              operationName: 'OrdrestyringMcpGetCreditor',
+              rootCandidates: ['creditor'],
+              idArgCandidates: ['number'],
+              preferredScalars: creditorPreferredScalars,
+              nestedPreferred: creditorNestedPreferred,
+            },
+            { id: input.number },
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_search_products',
+    {
+      title: 'Search Ordrestyring Products',
+      description: 'Search or list product/item master data by number or description.',
+      inputSchema: {
+        page: z.number().int().positive().default(1),
+        cursor: z.string().trim().min(1).optional(),
+        limit: z.number().int().min(1).max(500).default(50),
+        query: z.string().trim().min(1).optional(),
+        productType: z.enum(['ITEMS', 'HOURS']).optional(),
+        orderByField: z.string().trim().min(1).optional(),
+        orderDirection: z.enum(['ASC', 'DESC']).default('ASC'),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_search_products', input, async () =>
+        jsonToolResult(await readProducts(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_product',
+    {
+      title: 'Get Ordrestyring Product',
+      description: 'Fetch product/item master data by numeric product id.',
+      inputSchema: {
+        id: z.number().int().positive(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_product', input, async () =>
+        jsonToolResult(
+          await readDomainEntity(
+            client,
+            {
+              operationName: 'OrdrestyringMcpGetProduct',
+              rootCandidates: ['product'],
+              idArgCandidates: ['id'],
+              preferredScalars: productPreferredScalars,
+              nestedPreferred: productNestedPreferred,
+            },
+            input,
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_search_hour_types',
+    {
+      title: 'Search Ordrestyring Hour Types',
+      description: 'Search or list Ordrestyring hour types and linked time products.',
+      inputSchema: {
+        page: z.number().int().positive().default(1),
+        cursor: z.string().trim().min(1).optional(),
+        limit: z.number().int().min(1).max(500).default(50),
+        query: z.string().trim().min(1).optional(),
+        requireCase: z.boolean().optional(),
+        allHourTypes: z.boolean().default(true),
+        orderByField: z.string().trim().min(1).optional(),
+        orderDirection: z.enum(['ASC', 'DESC']).default('ASC'),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_search_hour_types', input, async () =>
+        jsonToolResult(await readHourTypes(client, input)),
+      ),
+  );
+
+  server.registerTool(
     'ordrestyring_list_case_time_entries',
     {
       title: 'List Ordrestyring Case Time Entries',
@@ -570,33 +892,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
     },
     async input =>
       runAuditedTool('ordrestyring_get_case_financials', input, async () =>
-        jsonToolResult(
-          await readDomainEntity(
-            client,
-            {
-              operationName: 'OrdrestyringMcpGetCaseFinancials',
-              rootCandidates: ['caseFinancials', 'caseEconomyByCaseId', 'caseEconomy', 'caseById'],
-              idArgCandidates: ['caseId', 'id'],
-              preferredScalars: [
-                'id',
-                'caseId',
-                'caseNumber',
-                'budget',
-                'cost',
-                'price',
-                'amount',
-                'total',
-                'vat',
-                'profit',
-                'profitMargin',
-                'invoiceTotal',
-                'materialTotal',
-                'timeTotal',
-              ],
-            },
-            { id: input.caseId },
-          ),
-        ),
+        jsonToolResult(await readCaseFinancials(client, input.caseId)),
       ),
   );
 
@@ -710,6 +1006,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
       inputSchema: {
         ...paginationInputShape,
         status: z.string().trim().min(1).optional(),
+        statusId: z.number().int().positive().optional(),
         caseId: z.number().int().positive().optional(),
         customerId: z.number().int().positive().optional(),
       },
@@ -718,6 +1015,179 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
     async input =>
       runAuditedTool('ordrestyring_list_invoice_drafts', input, async () =>
         jsonToolResult(await readInvoiceDrafts(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_case_activity',
+    {
+      title: 'Get Ordrestyring Case Activity',
+      description: 'Read case activity and status-history records for one case.',
+      inputSchema: {
+        ...paginationInputShape,
+        caseId: z.number().int().positive(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_case_activity', input, async () =>
+        jsonToolResult({
+          activities: await readSection(() => readCaseActivities(client, input)),
+          statusHistory: await readSection(() => readCaseStatusHistory(client, input)),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_find_billable_cases',
+    {
+      title: 'Find Ordrestyring Billable Cases',
+      description: 'Find operational cases that look ready for billing review.',
+      inputSchema: {
+        ...paginationInputShape,
+        customerId: z.number().int().positive().optional(),
+        statusId: z.number().int().positive().optional(),
+        includeReadiness: z.boolean().default(false),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_find_billable_cases', input, async () =>
+        jsonToolResult(await findBillableCases(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_case_work_summary',
+    {
+      title: 'Get Ordrestyring Case Work Summary',
+      description: 'Summarize hours and materials for a case and optional date range.',
+      inputSchema: {
+        ...paginationInputShape,
+        ...dateRangeInputShape,
+        caseId: z.number().int().positive(),
+        includeSubCases: z.boolean().default(true),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_case_work_summary', input, async () =>
+        jsonToolResult(await readCaseWorkSummary(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_case_health',
+    {
+      title: 'Get Ordrestyring Case Health',
+      description:
+        'Collect case overview, activity, work, documents, quality checks, and billing readiness.',
+      inputSchema: {
+        ...paginationInputShape,
+        caseId: z.number().int().positive(),
+        includeSubCases: z.boolean().default(true),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_case_health', input, async () =>
+        jsonToolResult(await readCaseHealth(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_find_stale_cases',
+    {
+      title: 'Find Ordrestyring Stale Cases',
+      description: 'Find cases not updated for a configurable number of days.',
+      inputSchema: {
+        ...paginationInputShape,
+        daysWithoutUpdate: z.number().int().min(1).max(730).default(30),
+        customerId: z.number().int().positive().optional(),
+        statusId: z.number().int().positive().optional(),
+        currentUserAssigned: z.boolean().optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_find_stale_cases', input, async () =>
+        jsonToolResult(await findStaleCases(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_invoice_readiness',
+    {
+      title: 'Get Ordrestyring Invoice Readiness',
+      description:
+        'Inspect one case for billing readiness: overview, uninvoiced work, draft invoice, and financials.',
+      inputSchema: {
+        ...paginationInputShape,
+        caseId: z.number().int().positive(),
+        includeSubCases: z.boolean().default(true),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_invoice_readiness', input, async () =>
+        jsonToolResult(await readInvoiceReadiness(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_billing_pipeline',
+    {
+      title: 'Get Ordrestyring Billing Pipeline',
+      description: 'Read invoice drafts and sales invoices for pipeline review.',
+      inputSchema: {
+        ...paginationInputShape,
+        ...dateRangeInputShape,
+        caseId: z.number().int().positive().optional(),
+        customerId: z.number().int().positive().optional(),
+        statusId: z.number().int().positive().optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_billing_pipeline', input, async () =>
+        jsonToolResult({
+          drafts: await readSection(() => readInvoiceDrafts(client, input)),
+          invoices: await readSection(() => readSalesInvoices(client, input)),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_unbilled_work_report',
+    {
+      title: 'Get Ordrestyring Unbilled Work Report',
+      description: 'Summarize uninvoiced hours and materials for a case/date range.',
+      inputSchema: {
+        ...paginationInputShape,
+        ...dateRangeInputShape,
+        caseId: z.number().int().positive().optional(),
+        includeSubCases: z.boolean().default(true),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_unbilled_work_report', input, async () =>
+        jsonToolResult(await readUnbilledWorkReport(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'ordrestyring_get_operational_model',
+    {
+      title: 'Get Ordrestyring Operational Model',
+      description:
+        'Show the recommended Ordrestyring/e-conomic ownership boundary and live create/update mutation coverage.',
+      inputSchema: {},
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_get_operational_model', input, async () =>
+        jsonToolResult(await readOperationalModel(client)),
       ),
   );
 
@@ -735,6 +1205,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
         customerId: z.number().int().positive().optional(),
         employeeId: z.number().int().positive().optional(),
         status: z.string().trim().min(1).optional(),
+        statusId: z.number().int().positive().optional(),
       },
       annotations: READ_TOOL_ANNOTATIONS,
     },
@@ -743,6 +1214,104 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
         jsonToolResult(await readBusinessReport(client, input)),
       ),
   );
+
+  server.registerTool(
+    'ordrestyring_prepare_operational_mutation',
+    {
+      title: 'Prepare Ordrestyring Operational Mutation',
+      description:
+        'Prepare curated Ordrestyring create/convert mutations for inspection. This dry-run tool never calls Ordrestyring.',
+      inputSchema: {
+        operation: operationalMutationSchema,
+        input: z.record(z.string(), z.unknown()).default({}),
+        reason: z.string().trim().min(3),
+      },
+      annotations: DRY_RUN_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool('ordrestyring_prepare_operational_mutation', input, async () =>
+        jsonToolResult(await prepareOperationalMutation(client, input.operation, input.input, input.reason)),
+      ),
+  );
+
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_customer',
+    operation: 'create_customer',
+    title: 'Create Ordrestyring Customer',
+    description: 'Create an operational customer in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_case',
+    operation: 'create_case',
+    title: 'Create Ordrestyring Case',
+    description: 'Create an operational case/order in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_case_activity',
+    operation: 'create_case_activity',
+    title: 'Create Ordrestyring Case Activity',
+    description: 'Create an operational case activity or note in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_offer',
+    operation: 'create_offer',
+    title: 'Create Ordrestyring Offer',
+    description: 'Create an operational offer in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_convert_offer_to_case',
+    operation: 'convert_offer_to_case',
+    title: 'Convert Ordrestyring Offer To Case',
+    description: 'Convert an accepted offer to a case/order in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_product',
+    operation: 'create_product',
+    title: 'Create Ordrestyring Product',
+    description: 'Create an operational product/item in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_update_product',
+    operation: 'update_product',
+    title: 'Update Ordrestyring Product',
+    description: 'Update product/item master data in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_delete_products',
+    operation: 'delete_products',
+    title: 'Delete Ordrestyring Products',
+    description: 'Delete product/item master data in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_hour_type',
+    operation: 'create_hour_type',
+    title: 'Create Ordrestyring Hour Type',
+    description: 'Create an hour type linked to an Ordrestyring time product.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_update_hour_type',
+    operation: 'update_hour_type',
+    title: 'Update Ordrestyring Hour Type',
+    description: 'Update Ordrestyring hour type metadata and linked product number.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_case_material',
+    operation: 'create_case_material',
+    title: 'Create Ordrestyring Case Material',
+    description: 'Register operational material on a case in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_sales_invoice_draft',
+    operation: 'create_sales_invoice_draft',
+    title: 'Create Ordrestyring Sales Invoice Draft',
+    description: 'Create an operational sales invoice draft in Ordrestyring.',
+  });
+  registerOperationalWriteTool(server, client, {
+    toolName: 'ordrestyring_create_creditor',
+    operation: 'create_creditor',
+    title: 'Create Ordrestyring Creditor',
+    description: 'Create supplier/creditor master data in Ordrestyring.',
+  });
 
   server.registerTool(
     'ordrestyring_graphql_read',
@@ -806,11 +1375,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
       inputSchema: {
         preparedMutation: preparedMutationSchema,
         confirmOperationHash: z.string().trim().min(1),
-        idempotencyKey: z
-          .string()
-          .trim()
-          .min(8)
-          .describe('Audited caller-provided key. Ordrestyring does not document an idempotency header.'),
+        idempotencyKey: idempotencyKeySchema,
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
@@ -855,12 +1420,57 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
   );
 }
 
+function registerOperationalWriteTool(
+  server: McpServer,
+  client: OrdrestyringClient,
+  config: {
+    toolName: string;
+    operation: z.infer<typeof operationalMutationSchema>;
+    title: string;
+    description: string;
+  },
+): void {
+  server.registerTool(
+    config.toolName,
+    {
+      title: config.title,
+      description: `${config.description} Requires ORDRESTYRING_ENABLE_WRITES=true and write policy approval.`,
+      inputSchema: {
+        input: operationalInputSchema,
+        reason: z.string().trim().min(3),
+        idempotencyKey: idempotencyKeySchema,
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(
+        config.toolName,
+        {
+          operation: config.operation,
+          reason: input.reason,
+        },
+        async () =>
+          jsonToolResult(
+            await commitOperationalMutation(
+              client,
+              config.operation,
+              input.input,
+              input.reason,
+              input.idempotencyKey,
+            ),
+          ),
+        { idempotencyKey: input.idempotencyKey },
+      ),
+  );
+}
+
 function readTimeEntries(client: OrdrestyringClient, input: CollectionReadInput): Promise<unknown> {
   return readDomainCollection(
     client,
     {
       operationName: 'OrdrestyringMcpListCaseTimeEntries',
       rootCandidates: [
+        'hours',
         'caseTimeEntries',
         'timeEntries',
         'timeRegistrations',
@@ -868,8 +1478,51 @@ function readTimeEntries(client: OrdrestyringClient, input: CollectionReadInput)
         'registrations',
       ],
       preferredScalars: timePreferredScalars,
-      nestedPreferred: caseNestedPreferred,
-      defaultOrderByField: 'date',
+      nestedPreferred: timeNestedPreferred,
+      defaultOrderByField: 'startTime',
+      searchFields: ['description'],
+    },
+    input,
+  );
+}
+
+function readCreditors(client: OrdrestyringClient, input: CollectionReadInput): Promise<unknown> {
+  return readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpSearchCreditors',
+      rootCandidates: ['creditors'],
+      preferredScalars: creditorPreferredScalars,
+      nestedPreferred: creditorNestedPreferred,
+      searchFields: ['name', 'number', 'vatNumber'],
+    },
+    input,
+  );
+}
+
+function readProducts(client: OrdrestyringClient, input: CollectionReadInput): Promise<unknown> {
+  return readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpSearchProducts',
+      rootCandidates: ['products'],
+      preferredScalars: productPreferredScalars,
+      nestedPreferred: productNestedPreferred,
+      searchFields: ['number', 'description'],
+    },
+    input,
+  );
+}
+
+function readHourTypes(client: OrdrestyringClient, input: CollectionReadInput): Promise<unknown> {
+  return readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpSearchHourTypes',
+      rootCandidates: ['hourTypes'],
+      preferredScalars: hourTypePreferredScalars,
+      nestedPreferred: hourTypeNestedPreferred,
+      searchFields: ['name'],
     },
     input,
   );
@@ -884,6 +1537,7 @@ function summarizeTimeEntries(
     {
       operationName: 'OrdrestyringMcpSummarizeTime',
       rootCandidates: [
+        'hours',
         'caseTimeEntries',
         'timeEntries',
         'timeRegistrations',
@@ -891,8 +1545,9 @@ function summarizeTimeEntries(
         'registrations',
       ],
       preferredScalars: timePreferredScalars,
-      nestedPreferred: caseNestedPreferred,
-      defaultOrderByField: 'date',
+      nestedPreferred: timeNestedPreferred,
+      defaultOrderByField: 'startTime',
+      searchFields: ['description'],
     },
     input,
   );
@@ -911,8 +1566,10 @@ function readMaterials(client: OrdrestyringClient, input: CollectionReadInput): 
         'materialRegistrations',
       ],
       preferredScalars: materialPreferredScalars,
-      nestedPreferred: caseNestedPreferred,
-      defaultOrderByField: 'date',
+      nestedPreferred: materialNestedPreferred,
+      defaultOrderByField: 'materialDate',
+      searchFields: ['description', 'productNumber'],
+      argumentDefaults: { type: 'MATERIAL' },
     },
     input,
   );
@@ -926,13 +1583,754 @@ function readInvoiceDrafts(
     client,
     {
       operationName: 'OrdrestyringMcpListInvoiceDrafts',
-      rootCandidates: ['invoiceDrafts', 'invoices', 'draftInvoices', 'invoicePipeline'],
+      rootCandidates: ['salesInvoiceDrafts', 'invoiceDrafts', 'draftInvoices', 'invoicePipeline'],
       preferredScalars: invoicePreferredScalars,
-      nestedPreferred: caseNestedPreferred,
+      nestedPreferred: invoiceNestedPreferred,
       defaultOrderByField: 'updatedAt',
+      searchFields: ['text', 'header'],
     },
     input,
   );
+}
+
+function readSalesInvoices(
+  client: OrdrestyringClient,
+  input: CollectionReadInput,
+): Promise<unknown> {
+  return readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpListSalesInvoices',
+      rootCandidates: ['salesInvoices'],
+      preferredScalars: salesInvoicePreferredScalars,
+      nestedPreferred: invoiceNestedPreferred,
+      defaultOrderByField: 'updatedAt',
+      searchFields: ['invoiceNumber'],
+    },
+    input,
+  );
+}
+
+function readCaseActivities(
+  client: OrdrestyringClient,
+  input: CollectionReadInput,
+): Promise<unknown> {
+  return readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpCaseActivities',
+      rootCandidates: ['caseActivities'],
+      preferredScalars: activityPreferredScalars,
+      nestedPreferred: {
+        user: ['id', 'name', 'email'],
+      },
+      defaultOrderByField: 'createdAt',
+    },
+    input,
+  );
+}
+
+function readCaseStatusHistory(
+  client: OrdrestyringClient,
+  input: CollectionReadInput,
+): Promise<unknown> {
+  return readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpCaseStatusHistory',
+      rootCandidates: ['caseStatusHistory'],
+      preferredScalars: activityPreferredScalars,
+      nestedPreferred: {
+        user: ['id', 'name', 'email'],
+        status: ['id', 'name'],
+      },
+      defaultOrderByField: 'changedAt',
+    },
+    input,
+  );
+}
+
+async function readCaseWorkSummary(
+  client: OrdrestyringClient,
+  input: CollectionReadInput,
+): Promise<unknown> {
+  return {
+    hours: await readSection(() => summarizeTimeEntries(client, input)),
+    materials: await readSection(() =>
+      summarizeDomainCollection(
+        client,
+        {
+          operationName: 'OrdrestyringMcpCaseMaterialsSummary',
+          rootCandidates: [
+            'caseMaterials',
+            'materials',
+            'materialEntries',
+            'caseMaterialEntries',
+            'materialRegistrations',
+          ],
+          preferredScalars: materialPreferredScalars,
+          nestedPreferred: materialNestedPreferred,
+          defaultOrderByField: 'materialDate',
+          searchFields: ['description', 'productNumber'],
+          argumentDefaults: { type: 'MATERIAL' },
+        },
+        input,
+      ),
+    ),
+  };
+}
+
+async function findBillableCases(
+  client: OrdrestyringClient,
+  input: CollectionReadInput & { includeReadiness?: boolean },
+): Promise<unknown> {
+  const cases = await readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpFindBillableCases',
+      rootCandidates: ['cases'],
+      preferredScalars: casePreferredScalars,
+      nestedPreferred: caseNestedPreferred,
+      defaultOrderByField: 'updatedAt',
+      searchFields: ['caseNumber', 'description'],
+    },
+    {
+      ...input,
+      hoursPending: true,
+      invoiceSent: false,
+    },
+  );
+
+  if (!input.includeReadiness) {
+    return cases;
+  }
+
+  const items = extractItems((cases as { result?: unknown }).result).slice(0, Math.min(input.limit ?? 20, 10));
+  const readiness = await Promise.all(
+    items
+      .map(item => (item && typeof item === 'object' ? (item as { id?: unknown }).id : undefined))
+      .filter((id): id is number => typeof id === 'number')
+      .map(async caseId => ({
+        caseId,
+        readiness: await readSection(() => readInvoiceReadiness(client, { ...input, caseId })),
+      })),
+  );
+
+  return {
+    cases,
+    readiness,
+  };
+}
+
+async function readCaseHealth(
+  client: OrdrestyringClient,
+  input: CollectionReadInput & { caseId: number },
+): Promise<unknown> {
+  const sections = {
+    case: await readSection(() =>
+      readDomainEntity(
+        client,
+        {
+          operationName: 'OrdrestyringMcpCaseHealthCase',
+          rootCandidates: ['caseById', 'case', 'getCase'],
+          idArgCandidates: ['id', 'caseId'],
+          preferredScalars: casePreferredScalars,
+          nestedPreferred: caseNestedPreferred,
+        },
+        { id: input.caseId },
+      ),
+    ),
+    activity: await readSection(() => readCaseActivities(client, input)),
+    statusHistory: await readSection(() => readCaseStatusHistory(client, input)),
+    work: await readSection(() => readCaseWorkSummary(client, input)),
+    documents: await readSection(() =>
+      readDomainCollection(
+        client,
+        {
+          operationName: 'OrdrestyringMcpCaseHealthDocuments',
+          rootCandidates: [
+            'caseDocuments',
+            'documents',
+            'caseAttachments',
+            'attachments',
+            'casePhotos',
+            'photos',
+          ],
+          preferredScalars: documentPreferredScalars,
+        },
+        input,
+      ),
+    ),
+    qualityChecks: await readSection(() =>
+      readDomainCollection(
+        client,
+        {
+          operationName: 'OrdrestyringMcpCaseHealthQualityChecks',
+          rootCandidates: [
+            'caseQualityChecks',
+            'qualityChecks',
+            'qualityAssurance',
+            'checklists',
+            'forms',
+            'caseForms',
+            'caseSchemes',
+          ],
+          preferredScalars: qualityPreferredScalars,
+        },
+        input,
+      ),
+    ),
+    invoiceReadiness: await readSection(() => readInvoiceReadiness(client, input)),
+  };
+
+  return {
+    sections,
+    warnings: sectionWarnings(sections),
+  };
+}
+
+function findStaleCases(
+  client: OrdrestyringClient,
+  input: CollectionReadInput & { daysWithoutUpdate: number },
+): Promise<unknown> {
+  return readDomainCollection(
+    client,
+    {
+      operationName: 'OrdrestyringMcpFindStaleCases',
+      rootCandidates: ['cases'],
+      preferredScalars: casePreferredScalars,
+      nestedPreferred: caseNestedPreferred,
+      defaultOrderByField: 'updatedAt',
+      searchFields: ['caseNumber', 'description'],
+    },
+    {
+      ...input,
+      updatedTo: daysAgoIsoDate(input.daysWithoutUpdate),
+    },
+  );
+}
+
+async function readInvoiceReadiness(
+  client: OrdrestyringClient,
+  input: CollectionReadInput & { caseId: number },
+): Promise<unknown> {
+  return {
+    case: await readSection(() =>
+      readDomainEntity(
+        client,
+        {
+          operationName: 'OrdrestyringMcpInvoiceReadinessCase',
+          rootCandidates: ['caseById', 'case', 'getCase'],
+          idArgCandidates: ['id', 'caseId'],
+          preferredScalars: casePreferredScalars,
+          nestedPreferred: caseNestedPreferred,
+        },
+        { id: input.caseId },
+      ),
+    ),
+    uninvoicedHours: await readSection(() =>
+      summarizeTimeEntries(client, { ...input, isInvoiced: false, isAddedToDraft: false }),
+    ),
+    uninvoicedMaterials: await readSection(() =>
+      summarizeDomainCollection(
+        client,
+        {
+          operationName: 'OrdrestyringMcpInvoiceReadinessMaterials',
+          rootCandidates: [
+            'caseMaterials',
+            'materials',
+            'materialEntries',
+            'caseMaterialEntries',
+            'materialRegistrations',
+          ],
+          preferredScalars: materialPreferredScalars,
+          nestedPreferred: materialNestedPreferred,
+          defaultOrderByField: 'materialDate',
+          searchFields: ['description', 'productNumber'],
+          argumentDefaults: { type: 'MATERIAL' },
+        },
+        { ...input, isInvoiced: false, isAddedToDraft: false },
+      ),
+    ),
+    drafts: await readSection(() => readInvoiceDrafts(client, input)),
+    financials: await readSection(() => readCaseFinancials(client, input.caseId)),
+  };
+}
+
+async function readUnbilledWorkReport(
+  client: OrdrestyringClient,
+  input: CollectionReadInput,
+): Promise<unknown> {
+  return {
+    hours: await readSection(() =>
+      summarizeTimeEntries(client, { ...input, isInvoiced: false, isAddedToDraft: false }),
+    ),
+    materials: await readSection(() =>
+      summarizeDomainCollection(
+        client,
+        {
+          operationName: 'OrdrestyringMcpUnbilledMaterialsReport',
+          rootCandidates: [
+            'caseMaterials',
+            'materials',
+            'materialEntries',
+            'caseMaterialEntries',
+            'materialRegistrations',
+          ],
+          preferredScalars: materialPreferredScalars,
+          nestedPreferred: materialNestedPreferred,
+          defaultOrderByField: 'materialDate',
+          searchFields: ['description', 'productNumber'],
+          argumentDefaults: { type: 'MATERIAL' },
+        },
+        { ...input, isInvoiced: false, isAddedToDraft: false },
+      ),
+    ),
+  };
+}
+
+async function readOperationalModel(client: OrdrestyringClient): Promise<unknown> {
+  const catalog = await getSchemaCatalog(client);
+  const mutationNames = new Set(catalog.mutationFields.map(field => field.name));
+
+  return {
+    recommendedOwnership: {
+      ordrestyring: [
+        'customers and contacts as operational context',
+        'offers and offer lines',
+        'cases/orders, planning, activities, documentation, and quality checks',
+        'time and material registrations',
+        'invoice draft preparation and operational billing readiness',
+      ],
+      economic: [
+        'chart of accounts, VAT codes, dimensions, and posting setup',
+        'booked invoices and credit notes after approval',
+        'payments, open items, reconciliation, and accounting reports',
+        'supplier invoices and bookkeeping archive when finance owns the flow',
+      ],
+      integrationNotes: [
+        'Ordrestyring has a public e-conomic integration, so prefer using Ordrestyring as the daily operational source and e-conomic as the financial ledger.',
+        'Keep account numbers and VAT setup clean in e-conomic; use synchronized account/product metadata in Ordrestyring when creating operational lines.',
+      ],
+    },
+    curatedMutations: operationalMutationDefinitions().map(definition => ({
+      operation: definition.operation,
+      mutationName: definition.mutationName,
+      inputType: definition.inputType,
+      available: mutationNames.has(definition.mutationName),
+      owner: definition.owner,
+      notes: definition.notes,
+    })),
+  };
+}
+
+async function prepareOperationalMutation(
+  client: OrdrestyringClient,
+  operation: z.infer<typeof operationalMutationSchema>,
+  input: Record<string, unknown>,
+  reason: string,
+): Promise<unknown> {
+  const prepared = await buildPreparedOperationalMutation(client, operation, input, reason);
+  const definition = operationalMutationDefinitions().find(item => item.operation === operation);
+
+  return {
+    preparedMutation: prepared,
+    operation,
+    owner: definition?.owner,
+    notes: definition?.notes ?? [],
+  };
+}
+
+async function commitOperationalMutation(
+  client: OrdrestyringClient,
+  operation: z.infer<typeof operationalMutationSchema>,
+  input: Record<string, unknown>,
+  reason: string,
+  idempotencyKey: string,
+): Promise<unknown> {
+  if (operation === 'delete_products') {
+    return commitDeleteProductsMutation(client, input, reason, idempotencyKey);
+  }
+
+  const prepared = await buildPreparedOperationalMutation(client, operation, input, reason);
+  const mutationPolicy = await checkMutationPolicy(prepared);
+  if (!mutationPolicy.allowed) {
+    await writeAuditEvent({
+      tool: `ordrestyring_${operation}`,
+      action: 'policy_denied',
+      operationHash: prepared.operationHash,
+      idempotencyKey,
+      reason: mutationPolicy.reason,
+    });
+    throw new Error(mutationPolicy.reason);
+  }
+
+  const result = await client.graphql({
+    query: prepared.query,
+    variables: prepared.variables,
+    operationName: prepared.operationName,
+  });
+  const definition = operationalMutationDefinitions().find(item => item.operation === operation);
+
+  return {
+    operation,
+    operationHash: prepared.operationHash,
+    mutationNames: prepared.mutationNames,
+    owner: definition?.owner,
+    notes: definition?.notes ?? [],
+    result,
+  };
+}
+
+async function commitDeleteProductsMutation(
+  client: OrdrestyringClient,
+  input: Record<string, unknown>,
+  reason: string,
+  idempotencyKey: string,
+): Promise<unknown> {
+  const ids = deleteProductIdsFromInput(input);
+  const definition = operationalMutationDefinitions().find(item => item.operation === 'delete_products');
+  const results: Array<{ id: number; operationHash: string; result: unknown }> = [];
+
+  for (const id of ids) {
+    const prepared = await buildPreparedOperationalMutation(client, 'delete_products', { ids: [id] }, reason);
+    const mutationPolicy = await checkMutationPolicy(prepared);
+    if (!mutationPolicy.allowed) {
+      await writeAuditEvent({
+        tool: 'ordrestyring_delete_products',
+        action: 'policy_denied',
+        operationHash: prepared.operationHash,
+        idempotencyKey,
+        reason: mutationPolicy.reason,
+      });
+      throw new Error(mutationPolicy.reason);
+    }
+
+    results.push({
+      id,
+      operationHash: prepared.operationHash,
+      result: await client.graphql({
+        query: prepared.query,
+        variables: prepared.variables,
+        operationName: prepared.operationName,
+      }),
+    });
+  }
+
+  return {
+    operation: 'delete_products',
+    operationHash: results.map(item => item.operationHash),
+    mutationNames: ['deleteProduct'],
+    owner: definition?.owner,
+    notes: definition?.notes ?? [],
+    result: results,
+  };
+}
+
+async function buildPreparedOperationalMutation(
+  client: OrdrestyringClient,
+  operation: z.infer<typeof operationalMutationSchema>,
+  input: Record<string, unknown>,
+  reason: string,
+) {
+  const catalog = await getSchemaCatalog(client);
+  const definition = operationalMutationDefinitions().find(item => item.operation === operation);
+  if (!definition) {
+    throw new Error(`Unsupported operational mutation: ${operation}`);
+  }
+
+  const field = catalog.mutationFields.find(item => item.name === definition.mutationName);
+  if (!field) {
+    throw new Error(`Ordrestyring schema does not expose mutation: ${definition.mutationName}`);
+  }
+
+  return prepareMutation({
+    query: buildOperationalMutationQuery(catalog, definition, field),
+    variables: variablesForOperationalMutation(definition, input),
+    operationName: `OrdrestyringMcp${pascalCase(operation)}`,
+    reason,
+  });
+}
+
+interface OperationalMutationDefinition {
+  operation: z.infer<typeof operationalMutationSchema>;
+  mutationName: string;
+  inputType?: string;
+  owner: 'ordrestyring' | 'finance-boundary';
+  notes: string[];
+}
+
+function operationalMutationDefinitions(): OperationalMutationDefinition[] {
+  return [
+    {
+      operation: 'create_customer',
+      mutationName: 'createCustomer',
+      inputType: 'CreateCustomerInput',
+      owner: 'ordrestyring',
+      notes: ['Operational customer context; financial customer sync should be governed by the existing integration.'],
+    },
+    {
+      operation: 'create_case',
+      mutationName: 'createCase',
+      inputType: 'CreateCaseInput',
+      owner: 'ordrestyring',
+      notes: ['Daily order/case work belongs in Ordrestyring.'],
+    },
+    {
+      operation: 'create_case_activity',
+      mutationName: 'createCaseActivity',
+      inputType: 'CreateCaseActivityInput',
+      owner: 'ordrestyring',
+      notes: ['Use for operational notes and timeline events.'],
+    },
+    {
+      operation: 'create_offer',
+      mutationName: 'createOffer',
+      inputType: 'CreateOfferInput',
+      owner: 'ordrestyring',
+      notes: ['Offers and offer lines are operational and should be prepared in Ordrestyring.'],
+    },
+    {
+      operation: 'convert_offer_to_case',
+      mutationName: 'convertOfferToCase',
+      owner: 'ordrestyring',
+      notes: ['Converts accepted operational offers into cases/orders.'],
+    },
+    {
+      operation: 'create_product',
+      mutationName: 'createProduct',
+      inputType: 'CreateProductInput',
+      owner: 'ordrestyring',
+      notes: ['Operational products/items can live in Ordrestyring; account/VAT discipline remains finance-owned.'],
+    },
+    {
+      operation: 'update_product',
+      mutationName: 'updateProduct',
+      inputType: 'UpdateProductInput',
+      owner: 'ordrestyring',
+      notes: ['Use for governed product catalog synchronization from approved price sources.'],
+    },
+    {
+      operation: 'delete_products',
+      mutationName: 'deleteProduct',
+      owner: 'ordrestyring',
+      notes: ['Use only for explicit cleanup of placeholder product master data.'],
+    },
+    {
+      operation: 'create_hour_type',
+      mutationName: 'createHourType',
+      inputType: 'CreateHourTypeInput',
+      owner: 'ordrestyring',
+      notes: ['Hour types are operational time registration setup linked to time products.'],
+    },
+    {
+      operation: 'update_hour_type',
+      mutationName: 'updateHourType',
+      inputType: 'UpdateHourTypeInput',
+      owner: 'ordrestyring',
+      notes: ['Use for governed synchronization of operational time registration setup.'],
+    },
+    {
+      operation: 'create_case_material',
+      mutationName: 'createCaseMaterial',
+      inputType: 'CreateCaseMaterialInput',
+      owner: 'ordrestyring',
+      notes: ['Materials are operational registrations before billing.'],
+    },
+    {
+      operation: 'create_sales_invoice_draft',
+      mutationName: 'createSalesInvoiceDraft',
+      inputType: 'CreateSalesInvoiceDraftInput',
+      owner: 'finance-boundary',
+      notes: ['Draft creation is still operational; booking/sending belongs behind stricter finance approval.'],
+    },
+    {
+      operation: 'create_creditor',
+      mutationName: 'createCreditor',
+      inputType: 'CreateCreditorInput',
+      owner: 'finance-boundary',
+      notes: ['Supplier/creditor master data crosses into finance; keep policy allowlists tighter here.'],
+    },
+  ];
+}
+
+function buildOperationalMutationQuery(
+  catalog: Awaited<ReturnType<typeof getSchemaCatalog>>,
+  definition: OperationalMutationDefinition,
+  field: { type: Parameters<typeof namedTypeName>[0] },
+): string {
+  if (definition.operation === 'convert_offer_to_case') {
+    return `
+      mutation OrdrestyringMcp${pascalCase(definition.operation)}($id: Int!, $options: ConvertOfferToCaseOptionsInput) {
+        ${definition.mutationName}(id: $id, options: $options)${mutationSelection(catalog, field)}
+      }
+    `;
+  }
+
+  if (definition.operation === 'update_product' || definition.operation === 'update_hour_type') {
+    return `
+      mutation OrdrestyringMcp${pascalCase(definition.operation)}($id: Int!, $input: ${definition.inputType}!) {
+        ${definition.mutationName}(id: $id, input: $input)${mutationSelection(catalog, field)}
+      }
+    `;
+  }
+
+  if (definition.operation === 'delete_products') {
+    return `
+      mutation OrdrestyringMcp${pascalCase(definition.operation)}($id: [Int!]) {
+        ${definition.mutationName}(id: $id)${mutationSelection(catalog, field)}
+      }
+    `;
+  }
+
+  return `
+    mutation OrdrestyringMcp${pascalCase(definition.operation)}($input: ${definition.inputType}!) {
+      ${definition.mutationName}(input: $input)${mutationSelection(catalog, field)}
+    }
+  `;
+}
+
+function mutationSelection(
+  catalog: Awaited<ReturnType<typeof getSchemaCatalog>>,
+  field: { type: Parameters<typeof namedTypeName>[0] },
+): string {
+  if (isScalarLike(field.type)) {
+    return '';
+  }
+
+  const typeName = namedTypeName(field.type);
+  if (!typeName) {
+    return '';
+  }
+
+  return ` {\n${selectionForType(catalog, typeName, ['id', 'number', 'caseNumber', 'description', 'name', 'createdAt', 'updatedAt'])}\n}`;
+}
+
+function variablesForOperationalMutation(
+  definition: OperationalMutationDefinition,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  if (definition.operation === 'convert_offer_to_case') {
+    if (typeof input.id !== 'number') {
+      throw new Error('convert_offer_to_case requires numeric input.id.');
+    }
+
+    return {
+      id: input.id,
+      options: input.options ?? null,
+    };
+  }
+
+  if (definition.operation === 'update_product' || definition.operation === 'update_hour_type') {
+    if (typeof input.id !== 'number') {
+      throw new Error(`${definition.operation} requires numeric input.id.`);
+    }
+    if (!input.input || typeof input.input !== 'object' || Array.isArray(input.input)) {
+      throw new Error(`${definition.operation} requires object input.input.`);
+    }
+
+    return {
+      id: input.id,
+      input: input.input,
+    };
+  }
+
+  if (definition.operation === 'delete_products') {
+    return { id: deleteProductIdsFromInput(input) };
+  }
+
+  return { input };
+}
+
+function deleteProductIdsFromInput(input: Record<string, unknown>): number[] {
+  const ids = input.ids ?? input.id;
+  if (!Array.isArray(ids) || !ids.every(id => typeof id === 'number')) {
+    throw new Error('delete_products requires numeric input.ids array.');
+  }
+
+  return ids;
+}
+
+function readCaseFinancials(client: OrdrestyringClient, caseId: number): Promise<unknown> {
+  return readDomainEntity(
+    client,
+    {
+      operationName: 'OrdrestyringMcpGetCaseFinancials',
+      rootCandidates: ['caseFinanceAggregate', 'caseFinancials', 'caseEconomyByCaseId', 'caseEconomy', 'caseById'],
+      idArgCandidates: ['caseId', 'id'],
+      preferredScalars: [
+        'budget',
+        'budgetModifications',
+        'revisedBudget',
+        'pendingBudgetChanges',
+        'projectedBudget',
+        'directCosts',
+        'directMaterialCosts',
+        'pendingCosts',
+        'projectedCosts',
+        'projectedMarkup',
+        'markup',
+        'costDeviation',
+        'contracts',
+        'id',
+        'caseId',
+        'caseNumber',
+        'cost',
+        'total',
+        'profit',
+        'profitMargin',
+      ],
+    },
+    { id: caseId },
+  );
+}
+
+async function readSection<T>(call: () => Promise<T>): Promise<T | { error: string }> {
+  try {
+    return await call();
+  } catch (error) {
+    return { error: formatUnknownError(error) };
+  }
+}
+
+function extractItems(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.items)) {
+    return record.items;
+  }
+
+  return [];
+}
+
+function sectionWarnings(sections: Record<string, unknown>): string[] {
+  return Object.entries(sections)
+    .filter((entry): entry is [string, { error: string }] => {
+      const value = entry[1];
+      return Boolean(value && typeof value === 'object' && 'error' in value);
+    })
+    .map(([name, value]) => `${name}: ${value.error}`);
+}
+
+function daysAgoIsoDate(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
+function pascalCase(value: string): string {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map(part => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join('');
 }
 
 async function readBusinessReport(
@@ -977,22 +2375,29 @@ async function readBusinessReport(
     client,
     {
       operationName: 'OrdrestyringMcpCaseProfitabilityReport',
-      rootCandidates: ['caseFinancials', 'caseEconomyByCaseId', 'caseEconomy', 'caseById'],
+      rootCandidates: ['caseFinanceAggregate', 'caseFinancials', 'caseEconomyByCaseId', 'caseEconomy', 'caseById'],
       idArgCandidates: ['caseId', 'id'],
       preferredScalars: [
+        'budget',
+        'budgetModifications',
+        'revisedBudget',
+        'pendingBudgetChanges',
+        'projectedBudget',
+        'directCosts',
+        'directMaterialCosts',
+        'pendingCosts',
+        'projectedCosts',
+        'projectedMarkup',
+        'markup',
+        'costDeviation',
+        'contracts',
         'id',
         'caseId',
         'caseNumber',
-        'budget',
         'cost',
-        'price',
-        'amount',
         'total',
         'profit',
         'profitMargin',
-        'invoiceTotal',
-        'materialTotal',
-        'timeTotal',
       ],
     },
     { id: input.caseId },
@@ -1055,10 +2460,21 @@ function auditTarget(input: unknown): unknown {
     cursor: value.cursor,
     limit: value.limit,
     status: value.status,
+    statusId: value.statusId,
+    daysWithoutUpdate: value.daysWithoutUpdate,
+    includeReadiness: value.includeReadiness,
     dateFrom: value.dateFrom,
     dateTo: value.dateTo,
     updatedFrom: value.updatedFrom,
     updatedTo: value.updatedTo,
+    isInvoiced: value.isInvoiced,
+    isAddedToDraft: value.isAddedToDraft,
+    includeSubCases: value.includeSubCases,
+    hoursPending: value.hoursPending,
+    invoiceCreated: value.invoiceCreated,
+    invoiceSent: value.invoiceSent,
+    currentUserAssigned: value.currentUserAssigned,
+    operation: value.operation,
     orderByField: value.orderByField,
     orderDirection: value.orderDirection,
     fields: value.fields,

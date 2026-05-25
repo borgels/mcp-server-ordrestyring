@@ -24,7 +24,14 @@ describe('Ordrestyring policy', () => {
     delete process.env.ORDRESTYRING_ENABLE_WRITES;
 
     expect(checkToolPolicy('ordrestyring_search_schema')).toMatchObject({ allowed: true });
+    expect(checkToolPolicy('ordrestyring_diagnostics')).toMatchObject({ allowed: true });
+    expect(checkToolPolicy('ordrestyring_get_invoice_readiness')).toMatchObject({ allowed: true });
+    expect(checkToolPolicy('ordrestyring_get_billing_pipeline')).toMatchObject({ allowed: true });
+    expect(checkToolPolicy('ordrestyring_find_billable_cases')).toMatchObject({ allowed: true });
+    expect(checkToolPolicy('ordrestyring_prepare_operational_mutation')).toMatchObject({ allowed: true });
     expect(checkToolPolicy('ordrestyring_prepare_mutation')).toMatchObject({ allowed: true });
+    expect(checkToolPolicy('ordrestyring_create_offer')).toMatchObject({ allowed: false });
+    expect(checkToolPolicy('ordrestyring_update_product')).toMatchObject({ allowed: false });
     expect(checkToolPolicy('ordrestyring_commit_prepared_mutation')).toMatchObject({
       allowed: false,
     });
@@ -42,6 +49,7 @@ describe('Ordrestyring policy', () => {
     await expect(checkMutationPolicy(preparedUpdateUser())).resolves.toMatchObject({
       allowed: true,
     });
+    expect(checkToolPolicy('ordrestyring_create_offer')).toMatchObject({ allowed: true });
   });
 
   it('denies mutations by policy pattern and max variable bytes', async () => {

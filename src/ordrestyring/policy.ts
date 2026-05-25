@@ -17,15 +17,22 @@ const ALLOWED_READ_TOOLS = new Set([
   'ordrestyring_search_capabilities',
   'ordrestyring_check_connection',
   'ordrestyring_introspect_schema',
+  'ordrestyring_get_capability',
   'ordrestyring_search_schema',
   'ordrestyring_get_schema_type',
   'ordrestyring_refresh_schema',
+  'ordrestyring_diagnostics',
   'ordrestyring_list_cases',
   'ordrestyring_get_case',
   'ordrestyring_search_cases',
   'ordrestyring_get_case_overview',
   'ordrestyring_search_customers',
   'ordrestyring_get_customer_overview',
+  'ordrestyring_search_creditors',
+  'ordrestyring_get_creditor',
+  'ordrestyring_search_products',
+  'ordrestyring_get_product',
+  'ordrestyring_search_hour_types',
   'ordrestyring_list_case_time_entries',
   'ordrestyring_summarize_time',
   'ordrestyring_list_case_materials',
@@ -34,9 +41,35 @@ const ALLOWED_READ_TOOLS = new Set([
   'ordrestyring_list_case_documents',
   'ordrestyring_list_case_quality_checks',
   'ordrestyring_list_invoice_drafts',
+  'ordrestyring_get_case_activity',
+  'ordrestyring_find_billable_cases',
+  'ordrestyring_get_case_work_summary',
+  'ordrestyring_get_case_health',
+  'ordrestyring_find_stale_cases',
+  'ordrestyring_get_invoice_readiness',
+  'ordrestyring_get_billing_pipeline',
+  'ordrestyring_get_unbilled_work_report',
+  'ordrestyring_get_operational_model',
   'ordrestyring_get_business_report',
   'ordrestyring_graphql_read',
   'ordrestyring_prepare_mutation',
+  'ordrestyring_prepare_operational_mutation',
+]);
+
+const ALLOWED_WRITE_TOOLS = new Set([
+  'ordrestyring_create_customer',
+  'ordrestyring_create_case',
+  'ordrestyring_create_case_activity',
+  'ordrestyring_create_offer',
+  'ordrestyring_convert_offer_to_case',
+  'ordrestyring_create_product',
+  'ordrestyring_update_product',
+  'ordrestyring_delete_products',
+  'ordrestyring_create_hour_type',
+  'ordrestyring_update_hour_type',
+  'ordrestyring_create_case_material',
+  'ordrestyring_create_sales_invoice_draft',
+  'ordrestyring_create_creditor',
 ]);
 
 export function checkToolPolicy(toolName: string): OrdrestyringPolicyDecision {
@@ -44,7 +77,7 @@ export function checkToolPolicy(toolName: string): OrdrestyringPolicyDecision {
     return { allowed: true, reason: 'read-only or dry-run Ordrestyring tool' };
   }
 
-  if (toolName === 'ordrestyring_commit_prepared_mutation') {
+  if (toolName === 'ordrestyring_commit_prepared_mutation' || ALLOWED_WRITE_TOOLS.has(toolName)) {
     return checkWritesEnabled();
   }
 

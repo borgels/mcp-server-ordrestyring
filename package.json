@@ -21,7 +21,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepack": "npm run typecheck && npm test && npm run build",
-    "smoke:live": "tsx test/live-smoke.ts"
+    "smoke:live": "tsx test/live-smoke.ts",
+    "smoke:mcp": "tsx test/mcp-smoke.ts"
   },
   "repository": {
     "type": "git",
