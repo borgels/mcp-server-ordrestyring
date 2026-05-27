@@ -26,7 +26,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Borgels/mcp-server-ordrestyring.git"
+    "url": "git+https://github.com/borgels/mcp-server-ordrestyring.git"
   },
   "keywords": [
     "mcp",
@@ -40,9 +40,9 @@
     "node": ">=20.11"
   },
   "bugs": {
-    "url": "https://github.com/Borgels/mcp-server-ordrestyring/issues"
+    "url": "https://github.com/borgels/mcp-server-ordrestyring/issues"
   },
-  "homepage": "https://github.com/Borgels/mcp-server-ordrestyring#readme",
+  "homepage": "https://github.com/borgels/mcp-server-ordrestyring#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
