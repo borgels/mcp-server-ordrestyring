@@ -18,6 +18,7 @@ import {
 } from '../ordrestyring/domain.js';
 import {
   assertPreparedMutationHash,
+  assertPreparedMutationConsistent,
   assertReadQuery,
   prepareMutation,
 } from '../ordrestyring/graphql.js';
@@ -1328,7 +1329,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
     },
     async input =>
       runAuditedTool('ordrestyring_graphql_read', input, async () => {
-        assertReadQuery(input.query);
+        assertReadQuery(input.query, input.operationName);
         return jsonToolResult(
           await client.graphql({
             query: input.query,
@@ -1388,6 +1389,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
         },
         async () => {
           assertPreparedMutationHash(input.preparedMutation, input.confirmOperationHash);
+          assertPreparedMutationConsistent(input.preparedMutation);
           const mutationPolicy = await checkMutationPolicy(input.preparedMutation);
           if (!mutationPolicy.allowed) {
             await writeAuditEvent({

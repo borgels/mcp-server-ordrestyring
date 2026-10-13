@@ -52,6 +52,7 @@
   "homepage": "https://github.com/borgels/mcp-server-ordrestyring#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "graphql": "^16.14.2",
     "zod": "^4.4.3"
   },
   "overrides": {
