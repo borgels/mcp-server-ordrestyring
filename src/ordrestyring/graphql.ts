@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   Kind,
   parse,
@@ -12,12 +12,28 @@ export type OperationKind = 'query' | 'mutation' | 'subscription';
 export interface PreparedMutation {
   type: 'ordrestyring_prepared_mutation';
   createdAt: string;
+  expiresAt: string;
   query: string;
   variables: Record<string, unknown>;
   operationName?: string;
   reason: string;
   mutationNames: string[];
   operationHash: string;
+}
+
+export const PREPARED_MUTATION_TTL_MS = 15 * 60 * 1000;
+
+/** Random per-process key, used when ORDRESTYRING_PREPARE_SECRET is not set. */
+const processSecret = randomBytes(32);
+
+/**
+ * Key for the prepared-mutation HMAC. Set ORDRESTYRING_PREPARE_SECRET when
+ * several instances must accept each other's preparations (or across
+ * restarts); otherwise a random per-process key is used.
+ */
+function prepareSecret(): Buffer {
+  const configured = process.env.ORDRESTYRING_PREPARE_SECRET;
+  return configured ? Buffer.from(configured, 'utf8') : processSecret;
 }
 
 interface ParsedOperation {
@@ -89,9 +105,11 @@ export function prepareMutation(input: {
 }): PreparedMutation {
   assertMutation(input.query, input.operationName);
 
+  const createdAt = new Date();
   const preparedWithoutHash = {
     type: 'ordrestyring_prepared_mutation' as const,
-    createdAt: new Date().toISOString(),
+    createdAt: createdAt.toISOString(),
+    expiresAt: new Date(createdAt.getTime() + PREPARED_MUTATION_TTL_MS).toISOString(),
     query: input.query,
     variables: input.variables ?? {},
     operationName: input.operationName,
@@ -109,13 +127,32 @@ export function hashPreparedMutation(
   prepared: Omit<PreparedMutation, 'operationHash'> | PreparedMutation,
 ): string {
   const { operationHash: _operationHash, ...payload } = prepared as PreparedMutation;
-  return stableHash(payload);
+  return createHmac('sha256', prepareSecret()).update(stableJson(payload)).digest('hex');
 }
 
-export function assertPreparedMutationHash(prepared: PreparedMutation, confirmOperationHash: string): void {
-  const actualHash = hashPreparedMutation(prepared);
-  if (actualHash !== prepared.operationHash || actualHash !== confirmOperationHash) {
-    throw new Error('Prepared mutation hash mismatch. Re-run preparation and inspect the operation.');
+/**
+ * Verifies the server's HMAC over the prepared mutation (so it cannot have
+ * been forged or altered by the caller), that the caller echoed the same
+ * hash, and that the preparation has not expired.
+ */
+export function assertPreparedMutationHash(
+  prepared: PreparedMutation,
+  confirmOperationHash: string,
+  now: Date = new Date(),
+): void {
+  const expected = Buffer.from(hashPreparedMutation(prepared), 'hex');
+  const given = Buffer.from(String(prepared.operationHash ?? ''), 'hex');
+  const confirmed = Buffer.from(String(confirmOperationHash ?? ''), 'hex');
+  const signatureOk = expected.length === given.length && timingSafeEqual(expected, given);
+  const confirmOk = expected.length === confirmed.length && timingSafeEqual(expected, confirmed);
+  if (!signatureOk || !confirmOk) {
+    throw new Error(
+      'Prepared mutation hash mismatch: it was altered, prepared by another server instance, or the confirmation does not match. Re-run preparation and inspect the operation.',
+    );
+  }
+  const expiresAt = Date.parse(prepared.expiresAt);
+  if (!Number.isFinite(expiresAt) || now.getTime() > expiresAt) {
+    throw new Error('Prepared mutation has expired (15 minutes). Re-run preparation.');
   }
 }
 
@@ -185,9 +222,5 @@ function sortValue(value: unknown): unknown {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => [key, sortValue(item)]),
   );
-}
-
-function stableHash(value: unknown): string {
-  return createHash('sha256').update(stableJson(value)).digest('hex');
 }
 

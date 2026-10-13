@@ -72,6 +72,7 @@ const idempotencyKeySchema = z
 const preparedMutationSchema = z.object({
   type: z.literal('ordrestyring_prepared_mutation'),
   createdAt: z.string().trim().min(1),
+  expiresAt: z.string().trim().min(1),
   query: z.string().trim().min(1),
   variables: variablesSchema,
   operationName: z.string().trim().min(1).optional(),
