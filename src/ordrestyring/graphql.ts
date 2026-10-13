@@ -1,4 +1,12 @@
 import { createHash } from 'node:crypto';
+import {
+  Kind,
+  parse,
+  type DocumentNode,
+  type FragmentDefinitionNode,
+  type OperationDefinitionNode,
+  type SelectionSetNode,
+} from 'graphql';
 export type OperationKind = 'query' | 'mutation' | 'subscription';
 
 export interface PreparedMutation {
@@ -12,33 +20,59 @@ export interface PreparedMutation {
   operationHash: string;
 }
 
-export function getOperationKind(query: string): OperationKind | undefined {
-  const normalized = stripGraphqlComments(query).trimStart();
-
-  if (normalized.startsWith('{')) {
-    return 'query';
-  }
-
-  const match = /^(query|mutation|subscription)\b/i.exec(normalized);
-  return match?.[1]?.toLowerCase() as OperationKind | undefined;
+interface ParsedOperation {
+  document: DocumentNode;
+  operation: OperationDefinitionNode;
 }
 
-export function assertReadQuery(query: string): void {
-  const kind = getOperationKind(query);
+/**
+ * Parses the document with graphql-js and requires exactly one operation, so
+ * the operation we validate is the one the server executes. If operationName
+ * is given it must name that operation.
+ */
+function parseSingleOperation(query: string, operationName?: string): ParsedOperation {
+  let document: DocumentNode;
+  try {
+    document = parse(query);
+  } catch (error) {
+    throw new Error(`Invalid GraphQL document: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
-  if (kind !== 'query') {
+  const operations = document.definitions.filter(
+    (definition): definition is OperationDefinitionNode => definition.kind === Kind.OPERATION_DEFINITION,
+  );
+  if (operations.length !== 1) {
+    throw new Error('GraphQL documents must contain exactly one operation.');
+  }
+
+  const operation = operations[0]!;
+  if (operationName !== undefined && operation.name?.value !== operationName) {
+    throw new Error('operationName must match the single operation in the document.');
+  }
+
+  return { document, operation };
+}
+
+export function getOperationKind(query: string, operationName?: string): OperationKind | undefined {
+  try {
+    return parseSingleOperation(query, operationName).operation.operation as OperationKind;
+  } catch {
+    return undefined;
+  }
+}
+
+export function assertReadQuery(query: string, operationName?: string): void {
+  const { operation } = parseSingleOperation(query, operationName);
+
+  if (operation.operation !== 'query') {
     throw new Error('Only GraphQL query operations are allowed by this tool.');
   }
-
-  if (/\bmutation\b/i.test(stripGraphqlComments(query))) {
-    throw new Error('Read tool rejected a document containing a mutation operation.');
-  }
 }
 
-export function assertMutation(query: string): void {
-  const kind = getOperationKind(query);
+export function assertMutation(query: string, operationName?: string): void {
+  const { operation } = parseSingleOperation(query, operationName);
 
-  if (kind !== 'mutation') {
+  if (operation.operation !== 'mutation') {
     throw new Error('This tool only prepares GraphQL mutation operations.');
   }
 
@@ -53,7 +87,7 @@ export function prepareMutation(input: {
   operationName?: string;
   reason: string;
 }): PreparedMutation {
-  assertMutation(input.query);
+  assertMutation(input.query, input.operationName);
 
   const preparedWithoutHash = {
     type: 'ordrestyring_prepared_mutation' as const,
@@ -85,80 +119,50 @@ export function assertPreparedMutationHash(prepared: PreparedMutation, confirmOp
   }
 }
 
+
+/**
+ * Re-validates a prepared mutation at commit time. The prepared object comes
+ * back from the caller, so mutationNames (which the policy checks) must be
+ * derived from the query itself rather than trusted.
+ */
+export function assertPreparedMutationConsistent(prepared: PreparedMutation): void {
+  assertMutation(prepared.query, prepared.operationName);
+  const actual = [...extractTopLevelFields(prepared.query)].sort();
+  const claimed = [...prepared.mutationNames].sort();
+  if (actual.length !== claimed.length || actual.some((name, index) => name !== claimed[index])) {
+    throw new Error('Prepared mutation names do not match the mutation document. Re-run preparation.');
+  }
+}
+
+/** Top-level field names (not aliases) of the single operation, following fragments. */
 export function extractTopLevelFields(query: string): string[] {
-  const body = topLevelSelectionBody(stripGraphqlComments(query));
+  const { document, operation } = parseSingleOperation(query);
+  const fragments = new Map<string, FragmentDefinitionNode>();
+  for (const definition of document.definitions) {
+    if (definition.kind === Kind.FRAGMENT_DEFINITION) {
+      fragments.set(definition.name.value, definition);
+    }
+  }
+
   const fields = new Set<string>();
-  let depth = 0;
-  let current = '';
-  let readingName = false;
-  let quote: '"' | undefined;
-  let escaped = false;
-
-  for (const char of body) {
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === quote) {
-        quote = undefined;
+  const visited = new Set<string>();
+  const collect = (selectionSet: SelectionSetNode) => {
+    for (const selection of selectionSet.selections) {
+      if (selection.kind === Kind.FIELD) {
+        fields.add(selection.name.value);
+      } else if (selection.kind === Kind.INLINE_FRAGMENT) {
+        collect(selection.selectionSet);
+      } else {
+        const name = selection.name.value;
+        const fragment = fragments.get(name);
+        if (fragment && !visited.has(name)) {
+          visited.add(name);
+          collect(fragment.selectionSet);
+        }
       }
-      continue;
     }
-
-    if (char === '"') {
-      quote = char;
-      continue;
-    }
-
-    if (char === '{' || char === '(') {
-      if (depth === 0 && current && readingName) {
-        fields.add(current);
-      }
-      depth += 1;
-      current = '';
-      readingName = false;
-      continue;
-    }
-
-    if (char === '}' || char === ')') {
-      depth -= 1;
-      current = '';
-      readingName = false;
-      continue;
-    }
-
-    if (depth !== 0) {
-      continue;
-    }
-
-    if (/[A-Za-z_]/.test(char) && !readingName) {
-      readingName = true;
-      current = char;
-      continue;
-    }
-
-    if (readingName && /[A-Za-z0-9_]/.test(char)) {
-      current += char;
-      continue;
-    }
-
-    if (readingName && char === ':') {
-      current = '';
-      readingName = false;
-      continue;
-    }
-
-    if (readingName && /\s/.test(char)) {
-      fields.add(current);
-      current = '';
-      readingName = false;
-    }
-  }
-
-  if (current && readingName) {
-    fields.add(current);
-  }
+  };
+  collect(operation.selectionSet);
 
   return [...fields].filter(field => !field.startsWith('__'));
 }
@@ -187,54 +191,3 @@ function stableHash(value: unknown): string {
   return createHash('sha256').update(stableJson(value)).digest('hex');
 }
 
-function stripGraphqlComments(query: string): string {
-  return query
-    .split('\n')
-    .map(line => line.replace(/#.*/, ''))
-    .join('\n');
-}
-
-function topLevelSelectionBody(query: string): string {
-  const start = query.indexOf('{');
-  if (start === -1) {
-    return '';
-  }
-
-  let depth = 0;
-  let quote: '"' | undefined;
-  let escaped = false;
-
-  for (let index = start; index < query.length; index += 1) {
-    const char = query[index];
-
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      quote = char;
-      continue;
-    }
-
-    if (char === '{') {
-      depth += 1;
-      continue;
-    }
-
-    if (char === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return query.slice(start + 1, index);
-      }
-    }
-  }
-
-  return query.slice(start + 1);
-}

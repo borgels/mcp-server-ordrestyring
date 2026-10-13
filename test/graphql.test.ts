@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  assertPreparedMutationConsistent,
   assertPreparedMutationHash,
   assertReadQuery,
   extractTopLevelFields,
@@ -92,3 +93,45 @@ function restoreEnv(name: string, value: string | undefined): void {
     process.env[name] = value;
   }
 }
+
+describe('GraphQL guard bypasses', () => {
+  it("rejects a mutation hidden after a '#' inside a string literal", () => {
+    const query =
+      'query Q { cases(search: "a#b") { nextCursor } } mutation M { deleteProduct(id: 1) { id } }';
+    expect(() => assertReadQuery(query, 'M')).toThrow(/exactly one operation/);
+    expect(() => assertReadQuery(query)).toThrow(/exactly one operation/);
+  });
+
+  it('rejects multiple operations and mismatched operationName', () => {
+    expect(() => assertReadQuery('query A { __typename } query B { __typename }')).toThrow(/exactly one operation/);
+    expect(() => assertReadQuery('query A { __typename }', 'B')).toThrow(/operationName must match/);
+    expect(() => assertReadQuery('query A { __typename }', 'A')).not.toThrow();
+  });
+
+  it('allows "#" and the word mutation inside query string arguments', () => {
+    expect(() => assertReadQuery('query { cases(search: "mutation #1") { nextCursor } }')).not.toThrow();
+  });
+
+  it('rejects unparseable documents', () => {
+    expect(() => assertReadQuery('query { cases(')).toThrow(/Invalid GraphQL document/);
+    expect(getOperationKind('query { cases(')).toBeUndefined();
+  });
+
+  it('extracts mutation fields through fragments so policy sees them', () => {
+    expect(
+      extractTopLevelFields(
+        'mutation M { ...F ... on Mutation { updateCase(id: 1, input: {}) { id } } } fragment F on Mutation { deleteProduct(id: 1) { id } }',
+      ),
+    ).toEqual(['deleteProduct', 'updateCase']);
+  });
+
+  it('rejects a prepared mutation whose mutationNames were edited by the caller', () => {
+    const prepared = prepareMutation({
+      query: 'mutation { deleteProduct(id: 1) { id } }',
+      reason: 'test',
+    });
+    expect(() => assertPreparedMutationConsistent(prepared)).not.toThrow();
+    const tampered = { ...prepared, mutationNames: ['updateCase'] };
+    expect(() => assertPreparedMutationConsistent(tampered)).toThrow(/do not match/);
+  });
+});
