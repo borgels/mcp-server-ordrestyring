@@ -107,7 +107,12 @@ async function readResponseBody(response: Response): Promise<unknown> {
 }
 
 function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '');
+  // Linear scan instead of /\/+$/, which backtracks polynomially on long runs of '/'.
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 function assertSafeBaseUrl(baseUrl: string): void {

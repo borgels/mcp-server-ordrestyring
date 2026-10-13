@@ -273,6 +273,11 @@ Write flow:
 2. For advanced/debug flows, call `ordrestyring_prepare_mutation` or
    `ordrestyring_prepare_operational_mutation`, inspect the returned
    `operationHash`, then call `ordrestyring_commit_prepared_mutation`.
+   The `operationHash` is an HMAC-SHA256 keyed with `ORDRESTYRING_PREPARE_SECRET`
+   (a random per-process key when unset), so a prepared mutation cannot be
+   forged or altered by the caller. Preparations expire after 15 minutes. Set a
+   shared secret if several instances (or restarts) must accept each other's
+   preparations.
 3. Keep `allowedMutations` narrow in the policy file, for example
    `["createOffer", "createCase"]` while testing.
 
@@ -314,7 +319,8 @@ PORT=3000 ORDRESTYRING_API_TOKEN="your-api-token" npm run dev:http
 By default the HTTP server binds to `127.0.0.1`, limits request bodies to 10 MiB,
 allows browser CORS only from loopback origins, and does not require an HTTP
 Bearer token. You can override this with `MCP_HTTP_HOST`, `MCP_MAX_BODY_BYTES`,
-`MCP_ALLOWED_ORIGINS`, `MCP_ALLOW_ANY_ORIGIN=true`, and `MCP_HTTP_TOKEN`.
+`MCP_ALLOWED_ORIGINS`, `MCP_ALLOW_ANY_ORIGIN=true`, and `MCP_HTTP_TOKEN` (compared in
+constant time).
 
 The MCP endpoint is `POST http://127.0.0.1:3000/mcp`.
 
