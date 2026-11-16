@@ -163,3 +163,45 @@ function jsonResponse(payload: unknown, status = 200, headers: Record<string, st
     },
   });
 }
+
+describe('OrdrestyringClient upstream hardening', () => {
+  function makeClient(fetchMock: typeof fetch, apiToken = 'secret-test-token') {
+    return new OrdrestyringClient({ apiToken, baseUrl: 'https://example.test', fetchImpl: fetchMock });
+  }
+
+  it('never follows redirects, so the token and body are not re-sent', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response(null, { status: 307, headers: { location: 'https://elsewhere.example/graphql?sig=abc' } }),
+    );
+    const error = await makeClient(fetchMock).graphql({ query: 'query { __typename }' }).catch((e: unknown) => e);
+    expect((error as Error).message).toMatch(/redirect \(HTTP 307\) to https:\/\/elsewhere\.example\/graphql/);
+    expect((error as Error).message).not.toContain('sig=abc');
+    expect(fetchMock.mock.calls[0]![1]?.redirect).toBe('manual');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps error bodies and redacts the configured token before truncating', async () => {
+    const token = 'configured-ordrestyring-token-0123456789';
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response(`${'y'.repeat(490)}${token}${'z'.repeat(1_000_000)}`, { status: 500 }),
+    );
+    const error = await makeClient(fetchMock, token).graphql({ query: 'query { __typename }' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OrdrestyringHttpError);
+    expect((error as Error).message.length).toBeLessThan(1_000);
+    expect((error as Error).message).not.toContain(token.slice(0, 10));
+  });
+
+  it('rejects an invalid ORDRESTYRING_TIMEOUT_MS instead of producing NaN', () => {
+    const original = process.env.ORDRESTYRING_TIMEOUT_MS;
+    process.env.ORDRESTYRING_TIMEOUT_MS = '30s';
+    try {
+      expect(() => new OrdrestyringClient({ apiToken: 't' })).toThrow(/ORDRESTYRING_TIMEOUT_MS/);
+    } finally {
+      if (original === undefined) {
+        delete process.env.ORDRESTYRING_TIMEOUT_MS;
+      } else {
+        process.env.ORDRESTYRING_TIMEOUT_MS = original;
+      }
+    }
+  });
+});
