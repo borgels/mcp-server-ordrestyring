@@ -4,10 +4,10 @@ TypeScript MCP server for Ordrestyring's GraphQL API. It is intentionally boring
 good: typed, documented, read-first, policy-aware, credential-sane, and
 audit-friendly.
 
-> **Disclaimer:** This is an independent, unofficial project by Borgels. Borgels
-> is not affiliated with, endorsed by, or supported by Ordrestyring. "Ordrestyring"
-> and the Ordrestyring GraphQL API are referenced only to describe what this
-> server talks to. You need your own Ordrestyring API token, and use of the API is
+> **Disclaimer:** This is an independent, unofficial project. It is not
+> developed, endorsed or supported by Ordrestyring. "Ordrestyring" and the
+> Ordrestyring GraphQL API are referenced only to describe what this server
+> talks to. You need your own Ordrestyring API token, and use of the API is
 > subject to Ordrestyring's own terms.
 
 ## Scope
@@ -303,7 +303,9 @@ idempotency-key hash, status, and redacted errors. Tokens are never logged
 intentionally.
 
 Credentials are read only from the MCP server environment and are never accepted
-as tool arguments. Report suspected vulnerabilities privately to
+as tool arguments. Requests to Ordrestyring never follow redirects, so the token
+is not re-sent to another location; error bodies are read up to 64 KB and
+shortened after redaction. Report suspected vulnerabilities privately to
 <security@borgels.com>. Do not include API tokens, customer data, or other
 secrets in public GitHub issues.
 
@@ -317,18 +319,33 @@ PORT=3000 ORDRESTYRING_API_TOKEN="your-api-token" npm run dev:http
 ```
 
 By default the HTTP server binds to `127.0.0.1`, limits request bodies to 10 MiB,
-allows browser CORS only from loopback origins, and does not require an HTTP
-Bearer token. You can override this with `MCP_HTTP_HOST`, `MCP_MAX_BODY_BYTES`,
-`MCP_ALLOWED_ORIGINS`, `MCP_ALLOW_ANY_ORIGIN=true`, and `MCP_HTTP_TOKEN` (compared in
-constant time).
+and allows browser CORS only from loopback origins. Without `MCP_HTTP_TOKEN` it
+refuses to start on a non-loopback address. The token is compared in constant
+time.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MCP_HTTP_HOST` (or `HOST`) | `127.0.0.1` | Bind address. |
+| `PORT` | `3000` | Listen port (1-65535). |
+| `MCP_HTTP_TOKEN` | unset | Bearer token required on `/mcp`; at least 32 printable ASCII characters. Required when binding to a non-loopback address or with `MCP_ALLOW_ANY_ORIGIN=true`. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
+| `MCP_HTTP_ALLOW_UNAUTHENTICATED` | `false` | Start without a token on a non-loopback bind anyway (only when access is restricted by other means). |
+| `MCP_ALLOWED_ORIGINS` | localhost origins | Comma-separated exact `Origin` values allowed. Requests without `Origin` (server-to-server) are allowed. |
+| `MCP_ALLOW_ANY_ORIGIN` | `false` | Allow any `Origin` (requires a token). |
+| `MCP_ALLOWED_HOSTS` | see meaning | Comma-separated host names accepted in the `Host` header. By default a loopback bind only accepts localhost names and its bind address; other binds do not check `Host`. |
+| `MCP_MAX_BODY_BYTES` | `10485760` | Maximum request body size. |
+| `MCP_AUTH_FAILURE_LIMIT` | `20` | Failed authentication attempts per client address and window before further failures get HTTP 429; `0` disables. Requests with a valid token are never throttled. |
+| `MCP_AUTH_FAILURE_WINDOW_MS` | `60000` | Window for the limit above. |
+
+Invalid numeric or boolean values stop the server at startup with a message
+naming the variable. `GET /healthz` answers `{"status":"ok"}` without
+authentication, for container health checks.
 
 The MCP endpoint is `POST http://127.0.0.1:3000/mcp`.
 
-## Borgels Gateway Export
+## Gateway Export
 
-`mcp-server-ordrestyring/gateway` exposes a small typed adapter for Borgels
-control-plane runtimes that need to wrap this server without copying connector
-logic.
+`mcp-server-ordrestyring/gateway` exposes a small typed adapter for host
+applications that need to wrap this server without copying connector logic.
 
 The gateway exports:
 
@@ -350,8 +367,21 @@ First-wedge gateway tools:
 The gateway reads credentials from the server environment or factory options,
 never from tool arguments. Write tools remain disabled unless
 `ORDRESTYRING_ENABLE_WRITES=true` and the write policy allows the underlying
-mutation. This makes the gateway suitable for Borgels review and fixture
-automation while preserving the same safety model as the full MCP server.
+mutation. The gateway keeps the same safety model as the full MCP server.
+
+## Security model
+
+- The server uses one shared Ordrestyring API token for every caller. Anyone
+  who can call its tools acts with that token's access.
+- `MCP_HTTP_TOKEN` is a single shared secret that authenticates callers of
+  the HTTP endpoint; it does not identify individual users. Per-user
+  authentication and authorization belong in an identity-aware gateway or
+  proxy in front of this server.
+- Access to a tool is access to the data that tool can reach with the shared
+  token; the write policy limits which operations run, not which records a
+  caller may see.
+- The HTTP server does not terminate TLS. Run it on loopback or a private
+  network, behind a TLS-terminating proxy when traffic leaves the host.
 
 ## Rate Limits
 

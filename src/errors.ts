@@ -1,3 +1,5 @@
+import { redactRegisteredSecrets, truncate } from './upstream-http.js';
+
 export interface OrdrestyringGraphQLErrorPayload {
   message?: string;
   type?: string;
@@ -73,7 +75,7 @@ export function redactSecrets(value: string): string {
         const key = match.split(separator)[0]?.trim() ?? 'secret';
         return `${key}${separator} [REDACTED]`;
       }),
-    value,
+    redactRegisteredSecrets(value),
   );
 }
 
@@ -88,18 +90,22 @@ function formatOrdrestyringHttpError(input: {
 }): string {
   const parts = [
     `Ordrestyring GraphQL request failed with HTTP ${input.status}`,
-    input.retryAfter ? `retry-after=${input.retryAfter}s` : undefined,
-    input.rateLimitLimit ? `rate-limit=${input.rateLimitLimit}` : undefined,
-    input.rateLimitRemaining ? `rate-limit-remaining=${input.rateLimitRemaining}` : undefined,
+    input.retryAfter ? `retry-after=${truncate(input.retryAfter, 64)}s` : undefined,
+    input.rateLimitLimit ? `rate-limit=${truncate(input.rateLimitLimit, 64)}` : undefined,
+    input.rateLimitRemaining ? `rate-limit-remaining=${truncate(input.rateLimitRemaining, 64)}` : undefined,
     graphqlErrorsText(input.payload),
-    input.fallbackMessage,
+    // Redact before truncating, so a secret is never cut in half and left partly visible.
+    input.fallbackMessage === undefined ? undefined : truncate(redactSecrets(input.fallbackMessage.trim())),
   ].filter(Boolean);
 
   return redactSecrets(parts.join(' | '));
 }
 
+const MAX_GRAPHQL_ERRORS = 10;
+
 function formatOrdrestyringGraphQLErrors(errors: OrdrestyringGraphQLErrorPayload[]): string {
   const text = errors
+    .slice(0, MAX_GRAPHQL_ERRORS)
     .map(error =>
       [
         error.message ?? 'GraphQL error',
@@ -109,6 +115,7 @@ function formatOrdrestyringGraphQLErrors(errors: OrdrestyringGraphQLErrorPayload
         .filter(Boolean)
         .join(' '),
     )
+    .map(entry => truncate(redactSecrets(entry)))
     .join(' | ');
 
   return redactSecrets(text || 'Ordrestyring GraphQL returned errors.');

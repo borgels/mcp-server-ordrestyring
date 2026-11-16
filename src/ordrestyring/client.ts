@@ -1,4 +1,13 @@
+import { readEnvInteger } from '../config-env.js';
 import { OrdrestyringGraphQLError, OrdrestyringHttpError } from '../errors.js';
+import {
+  describeUrl,
+  discardBody,
+  isRedirect,
+  readErrorBody,
+  redirectRefusedMessage,
+  registerSecret,
+} from '../upstream-http.js';
 
 export interface OrdrestyringClientOptions {
   apiToken?: string;
@@ -26,12 +35,14 @@ export class OrdrestyringClient {
 
   constructor(options: OrdrestyringClientOptions = {}) {
     this.apiToken = options.apiToken ?? process.env.ORDRESTYRING_API_TOKEN;
+    registerSecret(this.apiToken);
     this.baseUrl = trimTrailingSlash(
       options.baseUrl ?? process.env.ORDRESTYRING_BASE_URL ?? 'https://graphql.ordrestyring.dk',
     );
     assertSafeBaseUrl(this.baseUrl);
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.ORDRESTYRING_TIMEOUT_MS ?? 30_000);
+    this.timeoutMs =
+      options.timeoutMs ?? readEnvInteger('ORDRESTYRING_TIMEOUT_MS', 30_000, { min: 1, max: 600_000 });
   }
 
   async graphql<T>(request: GraphQLRequest): Promise<T> {
@@ -66,15 +77,21 @@ export class OrdrestyringClient {
         variables: request.variables ?? {},
         operationName: request.operationName,
       }),
+      // Never follow redirects: the token and the request body would be re-sent to the new location.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
-    const responseBody = await readResponseBody(response);
+    if (isRedirect(response.status)) {
+      await discardBody(response);
+      throw new Error(redirectRefusedMessage('Ordrestyring GraphQL', response, 'POST', url));
+    }
 
     if (!response.ok) {
+      const responseBody = await readErrorBody(response);
       throw new OrdrestyringHttpError({
         status: response.status,
-        url,
+        url: describeUrl(url),
         payload: responseBody,
         retryAfter: response.headers.get('retry-after') ?? undefined,
         rateLimitLimit: response.headers.get('x-ratelimit-limit') ?? undefined,
@@ -83,7 +100,7 @@ export class OrdrestyringClient {
       });
     }
 
-    return responseBody as GraphQLResponse<T>;
+    return (await readResponseBody(response)) as GraphQLResponse<T>;
   }
 }
 
