@@ -418,6 +418,12 @@ The gateway keeps the same safety model as the full MCP server.
 What this server guarantees about the API token, and what it does not. It is
 the yardstick for every change that touches errors, results or audit.
 
+**Scope.** Guarantees (a), (b) and (c) apply to the embeddable gateway
+(`./gateway`), the surface a multi-tenant host uses. The standalone MCP
+server, configured from the environment for one token, keeps best-effort
+redaction: its errors and audit records are redacted with its token, but it
+is not held to these guarantees.
+
 **Guaranteed:**
 
 - **(a) The token never reaches anything persisted or shared:** audit sinks
@@ -439,13 +445,16 @@ the yardstick for every change that touches errors, results or audit.
 customer's own token back in data. Gateway results are redacted on a
 best-effort basis: the exact token, its URL- and JSON-encoded forms and any
 piece of it of 6 characters or more, in strings, object keys and the string
-form of numbers and booleans, are replaced by `"[REDACTED]"` before anything
+form of numbers and booleans, are replaced by `"‹redacted›"` before anything
 is serialised, so the text stays valid JSON. A token that comes back
 otherwise transformed (split into pieces shorter than 6 characters,
 reversed, re-encoded, hashed) is not recognised. Such data reaches only the
-tenant whose token it is, which already holds it. The MCP server applies
-this redaction to errors and audit records; its successful results are
-passed on as Ordrestyring returned them.
+tenant whose token it is, which already holds it. A gateway refuses a token
+that contains the redaction marker `‹redacted›` or shares a piece of 6
+characters with it, so redaction can never leave the token in place. The
+standalone MCP server applies the same redaction to errors and audit records
+on a best-effort basis; its successful results are passed on as Ordrestyring
+returned them.
 
 ## Security model
 
