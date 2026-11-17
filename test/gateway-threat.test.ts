@@ -183,7 +183,9 @@ describe('round 5 of the threat model, through callTool', () => {
   });
 
   it('keeps the result text valid JSON when a piece of the token is JSON syntax', async () => {
-    const JSONISH = 'x"ok": y-0123456789';
+    // With a space, as in round 7's counterexample, the token is not printable ASCII without spaces: refused.
+    expect(() => createOrdrestyringGateway({ apiToken: 'x"ok": y-0123456789', baseUrl: BASE })).toThrow(/key was refused/);
+    const JSONISH = 'x"ok":y-0123456789';
     const gateway = createOrdrestyringGateway({
       apiToken: JSONISH,
       baseUrl: BASE,
@@ -191,9 +193,9 @@ describe('round 5 of the threat model, through callTool', () => {
       fetchImpl: upstream(() => json({ data: { __typename: 'Query' } })),
     });
     const result = await gateway.callTool('check_connection', {});
-    expect(result.isError, result.content[0]?.text).toBeUndefined();
     expectValidJson(result);
-    expect(JSON.parse(result.content[0]!.text)).toEqual({ ok: true, typename: 'Query' });
+    const seen = JSON.stringify(result) + result.content.map(part => part.text).join('');
+    for (let i = 0; i + 6 <= JSONISH.length; i += 1) expect(seen).not.toContain(JSONISH.slice(i, i + 6));
   });
 
   it('redacts an audit sink failure that quotes the token', async () => {
