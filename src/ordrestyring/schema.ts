@@ -120,7 +120,8 @@ export function searchSchema(
 export function getSchemaType(catalog: GraphQLSchemaCatalog, typeName: string): GraphQLType {
   const type = catalog.typeByName.get(typeName);
   if (!type) {
-    throw new Error(`Ordrestyring schema type not found: ${typeName}`);
+    // Schema names are Ordrestyring's text: never quoted in an error.
+    throw new Error('The Ordrestyring schema does not have a type this tool needs.');
   }
 
   return type;
@@ -254,7 +255,7 @@ export function selectionForType(
   }
 
   if (!lines.length) {
-    throw new Error(`Ordrestyring schema type ${typeName} has no scalar fields to select.`);
+    throw new Error('An Ordrestyring schema type this tool needs has no scalar fields to select.');
   }
 
   return lines.join('\n');
@@ -268,7 +269,7 @@ export function connectionSelectionForField(
 ): string {
   const returnTypeName = namedTypeName(field.type);
   if (!returnTypeName) {
-    throw new Error(`Ordrestyring field ${field.name} has no named return type.`);
+    throw new Error('An Ordrestyring field this tool needs has no named return type.');
   }
 
   if (isListType(field.type)) {
