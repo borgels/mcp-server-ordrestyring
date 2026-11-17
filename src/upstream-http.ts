@@ -16,6 +16,24 @@ export const MAX_ERROR_TEXT = 500;
 export const MIN_SECRET_LENGTH = 8;
 /** Any piece of a secret this long or longer is redacted, wherever it appears. */
 export const FRAGMENT_LENGTH = 6;
+/**
+ * What a redacted value is replaced by. Its brackets are not ASCII, so it cannot be a piece of a token issued as
+ * ASCII; a gateway refuses a token that contains it or shares a FRAGMENT_LENGTH piece with it (overlapsMarker).
+ */
+export const REDACTION_MARKER = '‹redacted›';
+
+/** Whether a secret could survive its own redaction: it contains the marker, or shares a piece with it. */
+export function overlapsMarker(value: string): boolean {
+  if (value.includes(REDACTION_MARKER)) {
+    return true;
+  }
+  for (let i = 0; i + FRAGMENT_LENGTH <= REDACTION_MARKER.length; i += 1) {
+    if (value.includes(REDACTION_MARKER.slice(i, i + FRAGMENT_LENGTH))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * The secrets of one client, and so of one gateway or server instance: the
@@ -42,11 +60,11 @@ export class SecretRedactor {
     return this;
   }
 
-  /** Every secret value, and every run of text covered by a piece of one, replaced with [REDACTED]. */
+  /** Every secret value, and every run of text covered by a piece of one, replaced with ‹redacted›. */
   redact(value: string): string {
     let result = value;
     for (const secret of this.secrets) {
-      result = result.split(secret).join('[REDACTED]');
+      result = result.split(secret).join('‹redacted›');
     }
     return this.redactFragments(result);
   }
@@ -69,7 +87,7 @@ export class SecretRedactor {
     let i = 0;
     while (i < text.length) {
       if (covered[i]) {
-        out += '[REDACTED]';
+        out += '‹redacted›';
         while (i < text.length && covered[i]) i += 1;
       } else {
         out += text[i];
@@ -94,7 +112,7 @@ export function registerSecret(value: string | undefined): void {
 
 /**
  * Replaces the secrets of the instance whose call is in progress with
- * [REDACTED]: inside a gateway call the instance's own redactor, outside one
+ * ‹redacted›: inside a gateway call the instance's own redactor, outside one
  * (the MCP server) the server's.
  */
 export function redactRegisteredSecrets(value: string): string {
