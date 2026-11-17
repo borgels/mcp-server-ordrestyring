@@ -308,8 +308,10 @@ is not re-sent to another location. Errors carry no text from Ordrestyring: an
 HTTP error gives the status, our hint and the parsed Retry-After and rate-limit
 numbers (the body is discarded unread), a GraphQL error gives the number of
 errors, a redirect error does not quote the `Location`, a network error names
-only a system error code, and configuration errors do not quote the rejected
-value. Report suspected vulnerabilities privately to
+only a system error code, an error while reading a response is a fixed text,
+schema problems do not name the schema's types or fields, and configuration
+errors do not quote the rejected value. What is and is not guaranteed is in
+the threat model below. Report suspected vulnerabilities privately to
 <security@borgels.com>. Do not include API tokens, customer data, or other
 secrets in public GitHub issues.
 
@@ -380,13 +382,15 @@ the call. Every call runs in a call scope of its own, so a call made from
 inside another instance's call never inherits that instance's policy, sink or
 redactor. There is no process-wide registry of tokens.
 
-Each instance redacts its own token from every result it returns (text and
-structured data, object keys included), from every audit record, and from
-errors about its options: the exact value, its URL- and JSON-encoded forms,
-and any piece of it of 6 characters or more. Structured data is redacted
-before it is serialised; the handler's own text is never kept.
-`test/gateway-leaks.test.ts` proves this through every channel with one
-token that has a quote and a backslash.
+Each instance redacts its own token, best-effort, from every result it
+returns (text and structured data, object keys included, numbers and
+booleans by their string form), from every audit record, and from errors
+about its options: the exact value, its URL- and JSON-encoded forms, and any
+piece of it of 6 characters or more. Structured data is redacted before it
+is serialised and the handler's text is rebuilt from it, so the text stays
+valid JSON; responses are depth-limited when they are parsed.
+`test/gateway-leaks.test.ts` and `test/gateway-threat.test.ts` prove this
+through every channel. See the threat model for the residual risk.
 
 Under a host policy with `timeoutMs` given, an instance reads nothing from
 the environment: prepared-mutation hashes use a random key of the instance
@@ -408,6 +412,40 @@ environment or from tool arguments. Without a host policy, write tools remain
 disabled unless `ORDRESTYRING_ENABLE_WRITES=true` and the write policy allows
 the underlying mutation; under a host policy, unless `enableWrites` is true.
 The gateway keeps the same safety model as the full MCP server.
+
+## Threat model
+
+What this server guarantees about the API token, and what it does not. It is
+the yardstick for every change that touches errors, results or audit.
+
+**Guaranteed:**
+
+- **(a) The token never reaches anything persisted or shared:** audit sinks
+  and the audit log file, logs, error texts, export hooks or files. Errors
+  are our own texts; audit records and everything a gateway instance returns
+  are redacted with the instance's own token before they leave it.
+- **(b) No vendor-controlled free text in errors.** An error carries our own
+  fixed text, the HTTP status, numbers we parse (Retry-After, rate limits)
+  and the number of GraphQL errors; never a response body, a GraphQL error
+  message or path, a redirect's `Location`, a type, field or argument name
+  from the schema, or the message of an error thrown while reading a
+  response. A failed section of a combined read is the status or a fixed
+  text as well. Errors never quote a configuration value.
+- **(c) Results go only to the tenant whose token it is.** One gateway
+  instance per tenant; every call runs in a scope of its own; nothing about a
+  tenant is kept in process-wide state. The MCP server serves one token.
+
+**Not guaranteed (residual risk):** Ordrestyring deliberately echoing the
+customer's own token back in data. Gateway results are redacted on a
+best-effort basis: the exact token, its URL- and JSON-encoded forms and any
+piece of it of 6 characters or more, in strings, object keys and the string
+form of numbers and booleans, are replaced by `"[REDACTED]"` before anything
+is serialised, so the text stays valid JSON. A token that comes back
+otherwise transformed (split into pieces shorter than 6 characters,
+reversed, re-encoded, hashed) is not recognised. Such data reaches only the
+tenant whose token it is, which already holds it. The MCP server applies
+this redaction to errors and audit records; its successful results are
+passed on as Ordrestyring returned them.
 
 ## Security model
 
