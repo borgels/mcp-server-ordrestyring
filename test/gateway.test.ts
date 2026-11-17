@@ -273,7 +273,7 @@ describe('Ordrestyring gateway redaction', () => {
     expect(JSON.stringify(result)).not.toContain(TOKEN);
     expect(records.length).toBeGreaterThan(0);
     expect(JSON.stringify(records)).not.toContain(TOKEN);
-    expect(records[0]?.caller).toBe('person [REDACTED]');
+    expect(records[0]?.caller).toBe('person ‹redacted›');
   });
 
   it('redacts an unknown tool name before cutting it short, so no part of the token is left', async () => {
