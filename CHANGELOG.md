@@ -37,13 +37,22 @@ is guaranteed about the token and the residual risk.
   error code; configuration errors do not quote the rejected value. Failed
   sections of a combined read (`get_case_health` and the like) use the same
   texts.
+- The threat model's guarantees apply to the gateway (`./gateway`); the
+  standalone MCP server keeps best-effort redaction. Audit records are
+  redacted with the shared `redactDeep` (numbers and depth included); the
+  separate audit implementation is gone.
+- The redaction marker is `‹redacted›` (non-ASCII brackets). A gateway
+  refuses a token that contains it or shares a 6-character piece with it.
+  A successful result's JSON text is built from the redacted data and not
+  redacted again as text, so it stays valid JSON.
+- A network error names a system error code only from a fixed list.
 - No Ordrestyring text in other errors either (also for the MCP server): an
   error while reading a response is a fixed text, and schema problems no
   longer name the schema's types, fields or arguments.
 - Every result a gateway instance returns is redacted, best-effort, with its
   token after parsing and before serialising: the handler's text is rebuilt
   from the redacted data, keys included, and numbers and booleans whose
-  string form matches become the string `"[REDACTED]"`, so the text stays
+  string form matches become the string `"‹redacted›"`, so the text stays
   valid JSON. Responses are depth-limited when they are parsed. The redactor removes the exact token, its
   URL- and JSON-encoded forms and any piece of it of 6 characters or more.
   A policy that is an array is refused.
