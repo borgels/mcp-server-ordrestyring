@@ -155,11 +155,12 @@ export function redirectRefusedMessage(
   service: string,
   response: Response,
   method: string,
-  url: string,
+  _url: string,
 ): string {
-  // The Location is the vendor's text and is never quoted; only the status and our own request.
+  // The Location is the vendor's text and is never quoted, and the address is configuration: only the status and
+  // the method.
   return redactRegisteredSecrets(
-    `${service} responded with a redirect (HTTP ${response.status}) for ${method} ${describeUrl(url)}; ` +
+    `${service} responded with a redirect (HTTP ${response.status}) for ${method}; ` +
       'redirects are not followed. Check the configured base URL.',
   );
 }
