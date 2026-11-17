@@ -27,11 +27,21 @@ unchanged and still reads its configuration from the environment.
 - Every gateway call runs in its own call scope (AsyncLocalStorage), with or
   without a policy, so a call from inside another instance's call never
   inherits its policy, sink, redactor or caller.
-- Every result a gateway instance returns is redacted with its token, text
-  and structured data, keys included. Errors about the options (policy,
-  base URL) are redacted before they are thrown. Header values in HTTP errors
-  are redacted before they are cut short (also for the MCP server). A policy
-  that is an array is refused.
+- No Ordrestyring text in errors (also for the MCP server): an HTTP error
+  gives the status, our hint and the parsed Retry-After and rate-limit numbers
+  (the body is discarded unread, `payload` is gone); a GraphQL error gives the
+  number of errors (`errors` and `data` are gone, `count` is new); a redirect
+  error does not quote the `Location`; a network error names only a system
+  error code; configuration errors do not quote the rejected value. Failed
+  sections of a combined read (`get_case_health` and the like) use the same
+  texts.
+- Every result a gateway instance returns is redacted with its token after
+  parsing and before serialising: the handler's text is rebuilt from the
+  redacted data, keys included. The redactor removes the exact token, its
+  URL- and JSON-encoded forms and any piece of it of 6 characters or more.
+  A policy that is an array is refused.
+- A gateway instance hashes prepared mutations with its own random key and
+  never reads `ORDRESTYRING_PREPARE_SECRET`.
 - `callTool(name, input, { caller, requestId })`: the call context is
   written to every audit record of the call. Every string in an audit
   record, keys included, is redacted before it reaches the sink or the file;
