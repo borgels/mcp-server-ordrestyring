@@ -1,5 +1,5 @@
 import { readEnvInteger } from '../config-env.js';
-import { OrdrestyringGraphQLError, OrdrestyringHttpError } from '../errors.js';
+import { limitDepth, OrdrestyringGraphQLError, OrdrestyringHttpError } from '../errors.js';
 import {
   describeUrl,
   discardBody,
@@ -137,7 +137,16 @@ function transportError(url: string, error: unknown, timeoutMs: number): Error {
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    // Anything thrown while reading the body is replaced by our own text: its message is not ours.
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new Error('Ordrestyring GraphQL response timed out while it was being read.');
+    }
+    throw new Error('The Ordrestyring GraphQL response could not be read.');
+  }
 
   if (!text) {
     return null;
@@ -149,7 +158,8 @@ async function readResponseBody(response: Response): Promise<unknown> {
   }
 
   try {
-    return JSON.parse(text) as unknown;
+    // Depth-limited at once, so nothing downstream (a handler's JSON text, the gateway) can exhaust the stack.
+    return limitDepth(JSON.parse(text) as unknown);
   } catch {
     return text;
   }
