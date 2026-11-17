@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
-import { formatUnknownError, MAX_REDACT_DEPTH, MIN_SECRET_LENGTH } from './errors.js';
+import { formatUnknownError, MAX_REDACT_DEPTH } from './errors.js';
 import { writeAuditEvent } from './ordrestyring/audit.js';
 import { DEFAULT_BASE_URL, OrdrestyringClient, type OrdrestyringClientOptions } from './ordrestyring/client.js';
 import {
@@ -14,7 +14,8 @@ import {
   type ResolvedInstancePolicy,
 } from './ordrestyring/scope.js';
 import { registerOrdrestyringTools } from './tools/ordrestyring.js';
-import { overlapsMarker, REDACTION_MARKER, SecretRedactor } from './upstream-http.js';
+import { admitsKey, keyRefusedText } from './key-admission.js';
+import { SecretRedactor } from './upstream-http.js';
 
 /**
  * Embeddable entry point (package export `./gateway`): an embedding host,
@@ -281,18 +282,10 @@ function requiredToken(options: OrdrestyringGatewayOptions | undefined): string 
       'createOrdrestyringGateway requires options.apiToken. Embedded instances do not read credentials from the environment.',
     );
   }
-  // The redactor only protects secrets of MIN_SECRET_LENGTH characters or more; a shorter token could reach an error
-  // or an audit record as it is. Refuse it instead of using it unprotected.
-  if (value.trim().length < MIN_SECRET_LENGTH) {
-    throw new GatewayConfigError(
-      `createOrdrestyringGateway requires an apiToken of at least ${MIN_SECRET_LENGTH} characters.`,
-    );
-  }
-  // A token that overlaps the redaction marker would survive its own redaction.
-  if (overlapsMarker(value.trim())) {
-    throw new GatewayConfigError(
-      `createOrdrestyringGateway cannot use this apiToken: it overlaps the redaction marker ${REDACTION_MARKER}.`,
-    );
+  // Key admission (src/key-admission.ts): a short token, or one that shares a piece with any text of ours, could
+  // survive redaction or be mistaken for our own text. It is refused with a fixed text that holds no piece of it.
+  if (!admitsKey(value.trim())) {
+    throw new GatewayConfigError(keyRefusedText(value.trim()));
   }
   return value.trim();
 }
@@ -314,6 +307,7 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
   const redactor = new SecretRedactor().addSecret(apiToken);
   let policy: ResolvedInstancePolicy | undefined;
   let client: OrdrestyringClient;
+  let handlers: ReturnType<typeof registeredTools>;
   try {
     policy = hostPolicy === undefined ? undefined : resolveInstancePolicy(hostPolicy, GATEWAY_TOOL_NAMES);
     client = new OrdrestyringClient({
@@ -323,12 +317,12 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
       credentialEnv: {},
       redactor,
     });
+    handlers = registeredTools(client);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    // This server's messages quote no configuration value; redacted all the same, and never cut.
+    // This server's messages quote no configuration value; redacted all the same, as the last step, and never cut.
     throw new GatewayConfigError(redactor.redact(message));
   }
-  const handlers = registeredTools(client);
   const prepareSecret = randomBytes(32);
 
   return {
@@ -424,7 +418,8 @@ export type OrdrestyringGateway = ReturnType<typeof createOrdrestyringGateway>;
  */
 function normalizeResult(result: unknown, redactor: SecretRedactor): GatewayToolResult {
   if (!result || typeof result !== 'object' || !Array.isArray((result as { content?: unknown }).content)) {
-    return jsonResult('Ordrestyring gateway result.', redactDeep(result, redactor));
+    // Twice: the second pass, the last step, also covers what the first inserted (the depth placeholder).
+    return jsonResult('Ordrestyring gateway result.', redactDeep(redactDeep(result, redactor), redactor));
   }
 
   const content = (result as { content: Array<{ type?: unknown; text?: unknown }> }).content;
@@ -437,7 +432,8 @@ function normalizeResult(result: unknown, redactor: SecretRedactor): GatewayTool
       data = undefined;
     }
     if (data !== undefined) {
-      const safe = redactDeep(data, redactor);
+      // Twice: the second pass, the last step, also covers what the first inserted (the depth placeholder).
+      const safe = redactDeep(redactDeep(data, redactor), redactor);
       return { content: [{ type: 'text', text: JSON.stringify(safe, null, 2) }], structuredContent: toGatewayJson(safe) };
     }
   }
