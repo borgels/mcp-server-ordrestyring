@@ -22,7 +22,7 @@ import {
   assertReadQuery,
   prepareMutation,
 } from '../ordrestyring/graphql.js';
-import { checkMutationPolicy, checkToolPolicy } from '../ordrestyring/policy.js';
+import { checkMutationPolicy, checkToolPolicy, writesEnabled } from '../ordrestyring/policy.js';
 import {
   getSchemaCatalog,
   getSchemaType,
@@ -493,7 +493,7 @@ export function registerOrdrestyringTools(server: McpServer, client: Ordrestyrin
             expectedQueryFields.map(field => [field, queryFieldNames.has(field)]),
           ),
           writes: {
-            enabled: process.env.ORDRESTYRING_ENABLE_WRITES === 'true',
+            enabled: writesEnabled(),
             mutationCount: mutationFieldNames.size,
           },
           warnings: expectedQueryFields
