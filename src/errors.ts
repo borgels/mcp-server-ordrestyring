@@ -108,12 +108,12 @@ export function redactSecrets(value: string): string {
     (current, pattern) =>
       current.replace(pattern, match => {
         if (/^Bearer\s/i.test(match)) {
-          return 'Bearer [REDACTED]';
+          return 'Bearer ‹redacted›';
         }
 
         const separator = match.includes(':') ? ':' : '=';
         const key = match.split(separator)[0]?.trim() ?? 'secret';
-        return `${key}${separator} [REDACTED]`;
+        return `${key}${separator} ‹redacted›`;
       }),
     redactRegisteredSecrets(value),
   );
@@ -133,9 +133,9 @@ export function redactDeep(value: unknown, depth = 0): unknown {
     return redactSecrets(value);
   }
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    // The string form of a primitive is checked too; a match becomes the string "[REDACTED]", so JSON stays valid.
+    // The string form of a primitive is checked too; a match becomes the string "‹redacted›", so JSON stays valid.
     const text = String(value);
-    if (redactSecrets(text) !== text) return '[REDACTED]';
+    if (redactSecrets(text) !== text) return '‹redacted›';
     return typeof value === 'bigint' ? text : value;
   }
   if (typeof value !== 'object' || value === null) {
