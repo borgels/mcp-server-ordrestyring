@@ -27,6 +27,11 @@ unchanged and still reads its configuration from the environment.
 - Every gateway call runs in its own call scope (AsyncLocalStorage), with or
   without a policy, so a call from inside another instance's call never
   inherits its policy, sink, redactor or caller.
+- Every result a gateway instance returns is redacted with its token, text
+  and structured data, keys included. Errors about the options (policy,
+  base URL) are redacted before they are thrown. Header values in HTTP errors
+  are redacted before they are cut short (also for the MCP server). A policy
+  that is an array is refused.
 - `callTool(name, input, { caller, requestId })`: the call context is
   written to every audit record of the call. Every string in an audit
   record, keys included, is redacted before it reaches the sink or the file;
