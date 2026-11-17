@@ -150,13 +150,14 @@ const SHOWN_NETWORK_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** A network failure in our own words: only a system error code from a fixed list, never a message. */
-function transportError(url: string, error: unknown, timeoutMs: number): Error {
+function transportError(_url: string, error: unknown, timeoutMs: number): Error {
+  // The address is configuration and is not quoted.
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-    return new Error(`Ordrestyring GraphQL request timed out after ${timeoutMs} ms (POST ${describeUrl(url)}).`);
+    return new Error(`Ordrestyring GraphQL request timed out after ${timeoutMs} ms (POST).`);
   }
   const code = error instanceof Error ? (error.cause as { code?: unknown } | undefined)?.code : undefined;
   const shown = typeof code === 'string' && SHOWN_NETWORK_CODES.has(code) ? ` (${code})` : '';
-  return new Error(`Network error calling Ordrestyring GraphQL (POST ${describeUrl(url)})${shown}.`);
+  return new Error(`Network error calling Ordrestyring GraphQL (POST)${shown}.`);
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
