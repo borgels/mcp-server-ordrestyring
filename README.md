@@ -365,7 +365,7 @@ The gateway exports:
   on `POST /graphql`) and the `broad` mark. No gateway tool is broad: the free
   GraphQL read and the schema tools are not in the gateway.
 - `createOrdrestyringGateway({ apiToken, baseUrl?, timeoutMs?, fetchImpl?, policy? })`:
-  `apiToken` is required (at least 8 characters) and is never read from
+  `apiToken` is required (printable ASCII, at least 16 characters; see "Key admission") and is never read from
   `ORDRESTYRING_API_TOKEN`; `baseUrl` defaults to
   `https://graphql.ordrestyring.dk` and is never read from
   `ORDRESTYRING_BASE_URL`.
@@ -449,18 +449,23 @@ form of numbers and booleans, are replaced by `"‹redacted›"` before anything
 is serialised, so the text stays valid JSON. A token that comes back
 otherwise transformed (split into pieces shorter than 6 characters,
 reversed, re-encoded, hashed) is not recognised. Such data reaches only the
-tenant whose token it is, which already holds it. **Key admission.** Every token is a secret the vendor
-issues. A gateway refuses a token that is shorter than 16 characters or that
-shares a piece of 6 characters with any text of this server's own: every
-string literal in `src/` (markers, the depth placeholder, log prefixes, file
-names, error texts, variable names), listed in
-`src/fixed-corpus.generated.ts` by `scripts/fixed-corpus.mjs` and kept up to
-date by a test. The refusal is a fixed text that never repeats the token.
-So no text of ours can hold a piece of a token, and redaction can never leave
-one in place. On top of that, every string leaving a gateway (results,
-construction errors, whole stderr lines, archive and entry names) passes the
-instance's redactor as the very last step. Findings that rely on a token this
-rule refuses are out of scope. The
+tenant whose token it is, which already holds it. **What leaves a gateway holds no piece of the token.** This is checked at
+the sink, not inferred from our texts: every output is checked in its final
+form, and one that holds a piece of 6 characters of the token (or of one of
+its encoded forms) is replaced by a fixed fallback. The outputs are the tool
+list, every tool result as a whole (outer fields such as `isError`
+included) and audit records and lines, and construction errors. A result becomes a fixed
+"withheld" error, an audit record or line becomes a fixed one, and a
+construction error becomes the fixed refusal. The fallbacks are a small,
+closed set (`src/fallbacks.ts`), and a token that shares a piece with any of
+them, or with the tool list, is refused when the gateway is created.
+
+**Key admission.** Every token is a secret the vendor issues. A gateway
+accepts only printable ASCII (0x21-0x7E) of at least 16 characters, checked
+before anything is built from the token. As a cheap first filter it also
+refuses a token that shares a piece of 6 characters with a string literal in
+`src/` (`src/fixed-corpus.generated.ts`, kept up to date by a test). The
+refusal is a fixed text that never repeats the token. The
 standalone MCP server applies the same redaction to errors and audit records
 on a best-effort basis; its successful results are passed on as Ordrestyring
 returned them.
