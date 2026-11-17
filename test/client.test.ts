@@ -61,13 +61,15 @@ describe('OrdrestyringClient', () => {
     });
 
     await expect(client.graphql({ query: 'query { caseById(id: -1) { id } }' })).rejects.toThrow(
-      /ValidationError/,
+      /returned 1 error\./,
     );
 
     try {
       await client.graphql({ query: 'query { caseById(id: -1) { id } }' });
     } catch (error) {
       expect(error).toBeInstanceOf(OrdrestyringGraphQLError);
+      // Ordrestyring's own words, type and path are not kept.
+      expect((error as Error).message).not.toMatch(/validation|caseById/i);
     }
   });
 
@@ -174,8 +176,9 @@ describe('OrdrestyringClient upstream hardening', () => {
       new Response(null, { status: 307, headers: { location: 'https://elsewhere.example/graphql?sig=abc' } }),
     );
     const error = await makeClient(fetchMock).graphql({ query: 'query { __typename }' }).catch((e: unknown) => e);
-    expect((error as Error).message).toMatch(/redirect \(HTTP 307\) to https:\/\/elsewhere\.example\/graphql/);
-    expect((error as Error).message).not.toContain('sig=abc');
+    expect((error as Error).message).toMatch(/redirect \(HTTP 307\) for POST/);
+    // The Location is Ordrestyring's text: never quoted.
+    expect((error as Error).message).not.toContain('elsewhere');
     expect(fetchMock.mock.calls[0]![1]?.redirect).toBe('manual');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -187,8 +190,8 @@ describe('OrdrestyringClient upstream hardening', () => {
     );
     const error = await makeClient(fetchMock, token).graphql({ query: 'query { __typename }' }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OrdrestyringHttpError);
-    expect((error as Error).message.length).toBeLessThan(1_000);
-    expect((error as Error).message).not.toContain(token.slice(0, 10));
+    // The body is never read into the error.
+    expect((error as Error).message).toBe('Ordrestyring GraphQL request failed with HTTP 500');
   });
 
   it('rejects an invalid ORDRESTYRING_TIMEOUT_MS instead of producing NaN', () => {
