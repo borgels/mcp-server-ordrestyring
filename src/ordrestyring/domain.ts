@@ -97,14 +97,15 @@ export async function readDomainEntity(
   const field = findQueryField(catalog, config.rootCandidates);
   const idArg = findArg(field, config.idArgCandidates);
   if (!idArg) {
+    // Our own candidate names only; the schema's names are Ordrestyring's text and are never quoted.
     throw new Error(
-      `Ordrestyring query field ${field.name} does not expose one of these id arguments: ${config.idArgCandidates.join(', ')}`,
+      `The Ordrestyring query field this tool needs does not expose one of these id arguments: ${config.idArgCandidates.join(', ')}`,
     );
   }
 
   const returnTypeName = namedTypeName(field.type);
   if (!returnTypeName) {
-    throw new Error(`Ordrestyring query field ${field.name} has no named return type.`);
+    throw new Error('The Ordrestyring query field this tool needs has no named return type.');
   }
 
   const selection = selectionForType(
@@ -506,10 +507,9 @@ function assertNoUnsupportedRequiredArgs(field: GraphQLField, argumentsUsed: str
     .filter(arg => !used.has(arg.name));
 
   if (unsupportedRequired.length) {
+    // The argument names and types are Ordrestyring's text: only how many.
     throw new Error(
-      `Ordrestyring query field ${field.name} requires unsupported arguments: ${unsupportedRequired
-        .map(arg => `${arg.name}: ${typeRefToString(arg.type)}`)
-        .join(', ')}`,
+      `The Ordrestyring query field this tool needs requires ${unsupportedRequired.length} argument(s) the tool does not support.`,
     );
   }
 }

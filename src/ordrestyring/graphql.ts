@@ -7,6 +7,8 @@ import {
   type OperationDefinitionNode,
   type SelectionSetNode,
 } from 'graphql';
+import { currentPrepareSecret } from './scope.js';
+
 export type OperationKind = 'query' | 'mutation' | 'subscription';
 
 export interface PreparedMutation {
@@ -27,11 +29,17 @@ export const PREPARED_MUTATION_TTL_MS = 15 * 60 * 1000;
 const processSecret = randomBytes(32);
 
 /**
- * Key for the prepared-mutation HMAC. Set ORDRESTYRING_PREPARE_SECRET when
- * several instances must accept each other's preparations (or across
- * restarts); otherwise a random per-process key is used.
+ * Key for the prepared-mutation HMAC. Inside a gateway call, the instance's
+ * own random key (ORDRESTYRING_PREPARE_SECRET is not read). For the MCP
+ * server, ORDRESTYRING_PREPARE_SECRET when several instances must accept
+ * each other's preparations (or across restarts); otherwise a random
+ * per-process key.
  */
 function prepareSecret(): Buffer {
+  const instance = currentPrepareSecret();
+  if (instance) {
+    return instance;
+  }
   const configured = process.env.ORDRESTYRING_PREPARE_SECRET;
   return configured ? Buffer.from(configured, 'utf8') : processSecret;
 }
@@ -51,7 +59,8 @@ function parseSingleOperation(query: string, operationName?: string): ParsedOper
   try {
     document = parse(query);
   } catch (error) {
-    throw new Error(`Invalid GraphQL document: ${error instanceof Error ? error.message : String(error)}`);
+    // The document is built from the schema's names; the parser's message would quote them.
+    throw new Error('The GraphQL document for Ordrestyring is not valid.');
   }
 
   const operations = document.definitions.filter(

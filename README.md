@@ -304,8 +304,14 @@ intentionally.
 
 Credentials are read only from the MCP server environment and are never accepted
 as tool arguments. Requests to Ordrestyring never follow redirects, so the token
-is not re-sent to another location; error bodies are read up to 64 KB and
-shortened after redaction. Report suspected vulnerabilities privately to
+is not re-sent to another location. Errors carry no text from Ordrestyring: an
+HTTP error gives the status, our hint and the parsed Retry-After and rate-limit
+numbers (the body is discarded unread), a GraphQL error gives the number of
+errors, a redirect error does not quote the `Location`, a network error names
+only a system error code, an error while reading a response is a fixed text,
+schema problems do not name the schema's types or fields, and configuration
+errors do not quote the rejected value. What is and is not guaranteed is in
+the threat model below. Report suspected vulnerabilities privately to
 <security@borgels.com>. Do not include API tokens, customer data, or other
 secrets in public GitHub issues.
 
@@ -345,14 +351,51 @@ The MCP endpoint is `POST http://127.0.0.1:3000/mcp`.
 ## Gateway Export
 
 `mcp-server-ordrestyring/gateway` exposes a small typed adapter for host
-applications that need to wrap this server without copying connector logic.
+applications that need to wrap this server without copying connector logic,
+in the same shape as `mcp-server-template`. One process can run several
+gateway instances, for example one per tenant.
 
 The gateway exports:
 
 - `ordrestyringGatewayTools`: stable unprefixed tool definitions with name,
-  title, description, risk level, default enablement, and JSON input schema.
-- `createOrdrestyringGateway(options)`: a factory that accepts the same
-  credential, base URL, timeout, and `fetchImpl` options as `OrdrestyringClient`.
+  title, description, risk level, default enablement, and JSON input schema
+  (derived from the zod schemas the calls are validated with).
+- `ordrestyringToolCatalog`: the same tools as a deeply frozen catalog, with
+  the GraphQL requests each tool may make (`upstream`: `query` or `mutation`
+  on `POST /graphql`) and the `broad` mark. No gateway tool is broad: the free
+  GraphQL read and the schema tools are not in the gateway.
+- `createOrdrestyringGateway({ apiToken, baseUrl?, timeoutMs?, fetchImpl?, policy? })`:
+  `apiToken` is required (printable ASCII, at least 16 characters; see "Key admission") and is never read from
+  `ORDRESTYRING_API_TOKEN`; `baseUrl` defaults to
+  `https://graphql.ordrestyring.dk` and is never read from
+  `ORDRESTYRING_BASE_URL`.
+- `callTool(name, input, { caller, requestId })`: input is validated before
+  anything is sent, and unknown fields are refused. `caller` and `requestId`
+  go into the audit records of the call.
+
+With `policy: { enableWrites, disabledTools, audit }` the host decides the
+instance's policy: the instance then reads none of
+`ORDRESTYRING_ENABLE_WRITES`, `ORDRESTYRING_POLICY_PATH` or
+`ORDRESTYRING_AUDIT_LOG`, leaves the disabled tools out of `tools`, and sends
+its audit records to `audit` (none without it). A sink that throws refuses
+the call. Every call runs in a call scope of its own, so a call made from
+inside another instance's call never inherits that instance's policy, sink or
+redactor. There is no process-wide registry of tokens.
+
+Each instance redacts its own token, best-effort, from every result it
+returns (text and structured data, object keys included, numbers and
+booleans by their string form), from every audit record, and from errors
+about its options: the exact value, its URL- and JSON-encoded forms, and any
+piece of it of 6 characters or more. Structured data is redacted before it
+is serialised and the handler's text is rebuilt from it, so the text stays
+valid JSON; responses are depth-limited when they are parsed.
+`test/gateway-leaks.test.ts` and `test/gateway-threat.test.ts` prove this
+through every channel. See the threat model for the residual risk.
+
+Under a host policy with `timeoutMs` given, an instance reads nothing from
+the environment: prepared-mutation hashes use a random key of the instance
+(not `ORDRESTYRING_PREPARE_SECRET`). Without `timeoutMs` the timeout is read
+from `ORDRESTYRING_TIMEOUT_MS`; it is a limit, not a credential or policy.
 
 First-wedge gateway tools:
 
@@ -364,10 +407,68 @@ First-wedge gateway tools:
 - `create_customer` (disabled by default)
 - `delete_products` (disabled by default, destructive)
 
-The gateway reads credentials from the server environment or factory options,
-never from tool arguments. Write tools remain disabled unless
-`ORDRESTYRING_ENABLE_WRITES=true` and the write policy allows the underlying
-mutation. The gateway keeps the same safety model as the full MCP server.
+The gateway reads credentials only from the factory options, never from the
+environment or from tool arguments. Without a host policy, write tools remain
+disabled unless `ORDRESTYRING_ENABLE_WRITES=true` and the write policy allows
+the underlying mutation; under a host policy, unless `enableWrites` is true.
+The gateway keeps the same safety model as the full MCP server.
+
+## Threat model
+
+What this server guarantees about the API token, and what it does not. It is
+the yardstick for every change that touches errors, results or audit.
+
+**Scope.** Guarantees (a), (b) and (c) apply to the embeddable gateway
+(`./gateway`), the surface a multi-tenant host uses. The standalone MCP
+server, configured from the environment for one token, keeps best-effort
+redaction: its errors and audit records are redacted with its token, but it
+is not held to these guarantees.
+
+**Guaranteed:**
+
+- **(a) The token never reaches anything persisted or shared:** audit sinks
+  and the audit log file, logs, error texts, export hooks or files. Errors
+  are our own texts; audit records and everything a gateway instance returns
+  are redacted with the instance's own token before they leave it.
+- **(b) No vendor-controlled free text in errors.** An error carries our own
+  fixed text, the HTTP status, numbers we parse (Retry-After, rate limits)
+  and the number of GraphQL errors; never a response body, a GraphQL error
+  message or path, a redirect's `Location`, a type, field or argument name
+  from the schema, or the message of an error thrown while reading a
+  response. A failed section of a combined read is the status or a fixed
+  text as well. Errors never quote the key, the configured address or a refused configuration value (a timeout names its limit in milliseconds).
+- **(c) Results go only to the tenant whose token it is.** One gateway
+  instance per tenant; every call runs in a scope of its own; nothing about a
+  tenant is kept in process-wide state. The MCP server serves one token.
+
+**Not guaranteed (residual risk):** Ordrestyring deliberately echoing the
+customer's own token back in data. Gateway results are redacted on a
+best-effort basis: the exact token, its URL- and JSON-encoded forms and any
+piece of it of 6 characters or more, in strings, object keys and the string
+form of numbers and booleans, are replaced by `"‹redacted›"` before anything
+is serialised, so the text stays valid JSON. A token that comes back
+otherwise transformed (split into pieces shorter than 6 characters,
+reversed, re-encoded, hashed) is not recognised. Such data reaches only the
+tenant whose token it is, which already holds it. **What leaves a gateway holds no piece of the token.** This is checked at
+the sink, not inferred from our texts: every output is checked in its final
+form, and one that holds a piece of 6 characters of the token (or of one of
+its encoded forms) is replaced by a fixed fallback. The outputs are the tool
+list, every tool result as a whole (outer fields such as `isError`
+included) and audit records and lines, and construction errors. A result becomes a fixed
+"withheld" error, an audit record or line becomes a fixed one, and a
+construction error becomes the fixed refusal. Every error a gateway throws is a fresh error in final form: no `cause`, a `stack` of only `name: message` (no frames, paths or function names), and name, message and stack masked against the secret. The fallbacks are a small,
+closed set (`src/fallbacks.ts`), and a token that shares a piece with any of
+them, or with the tool list, is refused when the gateway is created.
+
+**Key admission.** Every token is a secret the vendor issues. A gateway
+accepts only printable ASCII (0x21-0x7E) of at least 16 characters, checked
+before anything is built from the token. As a cheap first filter it also
+refuses a token that shares a piece of 6 characters with a string literal in
+`src/` (`src/fixed-corpus.generated.ts`, kept up to date by a test). The
+refusal is a fixed text that never repeats the token. The
+standalone MCP server applies the same redaction to errors and audit records
+on a best-effort basis; its successful results are passed on as Ordrestyring
+returned them.
 
 ## Security model
 

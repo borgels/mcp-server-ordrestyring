@@ -113,7 +113,7 @@ describe('GraphQL guard bypasses', () => {
   });
 
   it('rejects unparseable documents', () => {
-    expect(() => assertReadQuery('query { cases(')).toThrow(/Invalid GraphQL document/);
+    expect(() => assertReadQuery('query { cases(')).toThrow('The GraphQL document for Ordrestyring is not valid.');
     expect(getOperationKind('query { cases(')).toBeUndefined();
   });
 

@@ -88,6 +88,10 @@ export function readEnvList(name: string, env: Env = process.env): string[] {
     .filter(Boolean);
 }
 
+/**
+ * A rejected value is never quoted, not even shortened: a variable can hold
+ * a secret by mistake, and a cut secret is no longer recognised by redaction.
+ */
 function describe(value: string): string {
-  return JSON.stringify(value.length > 40 ? `${value.slice(0, 40)}...` : value);
+  return `a value of ${value.length} characters`;
 }
