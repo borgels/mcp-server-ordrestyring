@@ -8,6 +8,17 @@ still reads its configuration from the environment; its errors change as
 described below (no Ordrestyring text). The README has a threat model: what
 is guaranteed about the token and the residual risk.
 
+- The sink check: every output of a gateway (the tool list, results, audit records and lines, construction errors) is checked in its
+  final form, and one that holds a piece of 6 characters of the token is
+  replaced by a fixed fallback (`src/fallbacks.ts`): a withheld result, a
+  fixed audit record or line, or the fixed refusal. A token that shares a
+  piece with a fallback or with the tool list is refused at creation.
+- Key admission: printable ASCII (0x21-0x7E) of at least 16 characters,
+  checked before anything is built from the token; the corpus of our own
+  string literals stays as a cheap first filter.
+- A text in a failure list of a successful answer (`failures`, `errors`,
+  `warnings` and the like) is replaced by our own text, like a failure
+  object.
 - `createOrdrestyringGateway` requires `apiToken` and never reads
   `ORDRESTYRING_API_TOKEN` or `ORDRESTYRING_BASE_URL`; the base URL defaults
   to `https://graphql.ordrestyring.dk`. A token shorter than 16 characters,
