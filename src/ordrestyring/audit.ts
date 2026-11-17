@@ -55,8 +55,9 @@ export async function writeAuditEvent(event: OrdrestyringAuditEvent): Promise<vo
     error: event.error === undefined ? undefined : formatUnknownError(event.error),
   };
   // Redacted with the shared redactDeep (the call scope's redactor, numbers and depth included), then copied
-  // through JSON: plain data, without undefined fields, that the server does not keep.
-  const safe = JSON.parse(JSON.stringify(redactDeep(record))) as Record<string, unknown>;
+  // through JSON: plain data, without undefined fields, that the server does not keep. The second pass is the final
+  // one, over the assembled record.
+  const safe = JSON.parse(JSON.stringify(redactDeep(redactDeep(record)))) as Record<string, unknown>;
 
   if (sink) {
     await sink(safe);
