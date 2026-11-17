@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
 import { formatUnknownError, redactDeep } from '../errors.js';
-import { currentCallContext, currentInstancePolicy } from './scope.js';
+import { withheldAuditRecord } from '../fallbacks.js';
+import { leaksSecret } from '../key-admission.js';
+import { currentCallContext, currentInstancePolicy, currentRedactor } from './scope.js';
 
 export interface OrdrestyringAuditEvent {
   requestId?: string;
@@ -59,10 +61,15 @@ export async function writeAuditEvent(event: OrdrestyringAuditEvent): Promise<vo
   // one, over the assembled record.
   const safe = JSON.parse(JSON.stringify(redactDeep(redactDeep(record)))) as Record<string, unknown>;
 
+  // The sink check (src/key-admission.ts), on the record and the line in their final form: one that holds a piece of
+  // the token is replaced by a fixed record.
+  const redactor = currentRedactor();
+  const leaks = (value: unknown) => redactor !== undefined && leaksSecret(value, redactor);
   if (sink) {
-    await sink(safe);
+    await sink(leaks(safe) ? withheldAuditRecord() : safe);
   } else if (auditPath) {
-    await appendFile(auditPath, `${JSON.stringify(safe)}\n`, 'utf8');
+    const line = JSON.stringify(safe);
+    await appendFile(auditPath, `${leaks(line) ? JSON.stringify(withheldAuditRecord()) : line}\n`, 'utf8');
   }
 }
 
