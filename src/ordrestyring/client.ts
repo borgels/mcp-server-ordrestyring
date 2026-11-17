@@ -7,13 +7,28 @@ import {
   readErrorBody,
   redirectRefusedMessage,
   registerSecret,
+  SecretRedactor,
 } from '../upstream-http.js';
+
+/** The Ordrestyring GraphQL API. */
+export const DEFAULT_BASE_URL = 'https://graphql.ordrestyring.dk';
 
 export interface OrdrestyringClientOptions {
   apiToken?: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Where a missing apiToken or baseUrl is read from. Default process.env
+   * (the MCP server). The gateway passes {}: an embedded instance never reads
+   * credentials from the environment.
+   */
+  credentialEnv?: Readonly<Record<string, string | undefined>>;
+  /**
+   * The instance's own redactor (the gateway). Without one the token is
+   * redacted by the MCP server's process-wide redactor.
+   */
+  redactor?: SecretRedactor;
 }
 
 export interface GraphQLRequest {
@@ -33,12 +48,19 @@ export class OrdrestyringClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
+  /** Redacts this client's token; the gateway runs every call with it in scope. */
+  readonly redactor: SecretRedactor;
+
   constructor(options: OrdrestyringClientOptions = {}) {
-    this.apiToken = options.apiToken ?? process.env.ORDRESTYRING_API_TOKEN;
-    registerSecret(this.apiToken);
-    this.baseUrl = trimTrailingSlash(
-      options.baseUrl ?? process.env.ORDRESTYRING_BASE_URL ?? 'https://graphql.ordrestyring.dk',
-    );
+    const env = options.credentialEnv ?? process.env;
+    this.apiToken = options.apiToken ?? env.ORDRESTYRING_API_TOKEN;
+    this.redactor = options.redactor ?? new SecretRedactor();
+    this.redactor.addSecret(this.apiToken);
+    if (!options.redactor) {
+      // The MCP server: its errors are redacted outside any call scope.
+      registerSecret(this.apiToken);
+    }
+    this.baseUrl = trimTrailingSlash(options.baseUrl ?? env.ORDRESTYRING_BASE_URL ?? DEFAULT_BASE_URL);
     assertSafeBaseUrl(this.baseUrl);
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs =
