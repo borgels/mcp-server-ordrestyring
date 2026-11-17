@@ -4,6 +4,8 @@
  * to a fixed size, and URLs in error messages carry no query string.
  */
 
+import { currentRedactor } from './ordrestyring/scope.js';
+
 /** Error bodies are read up to this many bytes; the rest is discarded. */
 export const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
@@ -11,29 +13,59 @@ export const MAX_ERROR_BODY_BYTES = 64 * 1024;
 export const MAX_ERROR_TEXT = 500;
 
 /** Configured secrets shorter than this are not redacted by value (too likely to hit normal text). */
-const MIN_SECRET_LENGTH = 8;
+export const MIN_SECRET_LENGTH = 8;
 
-const registeredSecrets = new Set<string>();
+/**
+ * Exact secret values of one client, and so of one gateway or server
+ * instance. Each gateway instance owns its redactor, so a host that runs
+ * several tenants in one process never mixes their keys, and a tenant's key
+ * is released with its instance.
+ */
+export class SecretRedactor {
+  private readonly secrets = new Set<string>();
 
-/** Redact this exact value (and its URL-encoded form) wherever it appears in error text. */
-export function registerSecret(value: string | undefined): void {
-  if (!value || value.length < MIN_SECRET_LENGTH) {
-    return;
+  /** Redact this exact value (and its URL-encoded form). Values shorter than MIN_SECRET_LENGTH are ignored. */
+  addSecret(value: string | undefined): this {
+    if (!value || value.length < MIN_SECRET_LENGTH) {
+      return this;
+    }
+    this.secrets.add(value);
+    const encoded = encodeURIComponent(value);
+    if (encoded !== value) {
+      this.secrets.add(encoded);
+    }
+    return this;
   }
-  registeredSecrets.add(value);
-  const encoded = encodeURIComponent(value);
-  if (encoded !== value) {
-    registeredSecrets.add(encoded);
+
+  /** Every secret value replaced with [REDACTED]. */
+  redact(value: string): string {
+    let result = value;
+    for (const secret of this.secrets) {
+      result = result.split(secret).join('[REDACTED]');
+    }
+    return result;
   }
 }
 
-/** Replaces every registered secret value with [REDACTED]. */
+/**
+ * The MCP server's own secrets (the token it reads from the environment).
+ * Gateway instances never add to it: their calls run in a call scope with
+ * their own redactor.
+ */
+const processRedactor = new SecretRedactor();
+
+/** Redact this exact value in the MCP server's error text (not used by gateway instances). */
+export function registerSecret(value: string | undefined): void {
+  processRedactor.addSecret(value);
+}
+
+/**
+ * Replaces the secrets of the instance whose call is in progress with
+ * [REDACTED]: inside a gateway call the instance's own redactor, outside one
+ * (the MCP server) the server's.
+ */
 export function redactRegisteredSecrets(value: string): string {
-  let result = value;
-  for (const secret of registeredSecrets) {
-    result = result.split(secret).join('[REDACTED]');
-  }
-  return result;
+  return (currentRedactor() ?? processRedactor).redact(value);
 }
 
 export function isRedirect(status: number): boolean {
