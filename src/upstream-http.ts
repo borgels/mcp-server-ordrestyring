@@ -120,7 +120,7 @@ export function truncate(value: string, max: number = MAX_ERROR_TEXT): string {
   return value.length > max ? `${value.slice(0, max)}... [truncated]` : value;
 }
 
-/** Message for a refused redirect; the Location is shown without its query string. */
+/** Message for a refused redirect: the status and our own request. The Location is never quoted. */
 export function redirectRefusedMessage(
   service: string,
   response: Response,
