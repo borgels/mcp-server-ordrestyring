@@ -374,8 +374,26 @@ instance's policy: the instance then reads none of
 its audit records to `audit` (none without it). A sink that throws refuses
 the call. Every call runs in a call scope of its own, so a call made from
 inside another instance's call never inherits that instance's policy, sink or
-redactor. Each instance redacts errors and audit records with its own token;
-there is no process-wide registry of tokens.
+redactor. There is no process-wide registry of tokens.
+
+What each instance redacts with its own token (the exact value and its
+URL-encoded form; credential-shaped `token=`/`Authorization:` pairs as well in
+errors and audit records):
+
+- every result it returns, successful or not: the text and the structured data,
+  object keys included;
+- every audit record, keys included;
+- errors about its options (policy, base URL), thrown as `GatewayConfigError`.
+
+Values are redacted before they are cut short (tool names, call context,
+header values, configuration), so no part of a token is left after a cut.
+Redaction works on the exact token: a fragment of it that Ordrestyring itself
+returns is not recognised. A host that shows results to people should not
+pass on upstream error text as it is.
+
+The timeout is still read from `ORDRESTYRING_TIMEOUT_MS` when `timeoutMs` is
+not given; it is a limit, not a credential or policy. Pass `timeoutMs` to
+read nothing from the environment.
 
 First-wedge gateway tools:
 
