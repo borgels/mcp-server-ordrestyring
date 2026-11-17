@@ -92,9 +92,12 @@ function formatOrdrestyringHttpError(input: {
 }): string {
   const parts = [
     `Ordrestyring GraphQL request failed with HTTP ${input.status}`,
-    input.retryAfter ? `retry-after=${truncate(input.retryAfter, 64)}s` : undefined,
-    input.rateLimitLimit ? `rate-limit=${truncate(input.rateLimitLimit, 64)}` : undefined,
-    input.rateLimitRemaining ? `rate-limit-remaining=${truncate(input.rateLimitRemaining, 64)}` : undefined,
+    // Each header value is redacted before it is cut short: a cut secret would no longer match.
+    input.retryAfter ? `retry-after=${truncate(redactSecrets(input.retryAfter), 64)}s` : undefined,
+    input.rateLimitLimit ? `rate-limit=${truncate(redactSecrets(input.rateLimitLimit), 64)}` : undefined,
+    input.rateLimitRemaining
+      ? `rate-limit-remaining=${truncate(redactSecrets(input.rateLimitRemaining), 64)}`
+      : undefined,
     graphqlErrorsText(input.payload),
     // Redact before truncating, so a secret is never cut in half and left partly visible.
     input.fallbackMessage === undefined ? undefined : truncate(redactSecrets(input.fallbackMessage.trim())),
