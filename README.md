@@ -436,7 +436,7 @@ is not held to these guarantees.
   message or path, a redirect's `Location`, a type, field or argument name
   from the schema, or the message of an error thrown while reading a
   response. A failed section of a combined read is the status or a fixed
-  text as well. Errors never quote a configuration value.
+  text as well. Errors never quote the key, the configured address or a refused configuration value (a timeout names its limit in milliseconds).
 - **(c) Results go only to the tenant whose token it is.** One gateway
   instance per tenant; every call runs in a scope of its own; nothing about a
   tenant is kept in process-wide state. The MCP server serves one token.
@@ -456,7 +456,7 @@ its encoded forms) is replaced by a fixed fallback. The outputs are the tool
 list, every tool result as a whole (outer fields such as `isError`
 included) and audit records and lines, and construction errors. A result becomes a fixed
 "withheld" error, an audit record or line becomes a fixed one, and a
-construction error becomes the fixed refusal. The fallbacks are a small,
+construction error becomes the fixed refusal. Every error a gateway throws is a fresh error in final form: no `cause`, a `stack` of only `name: message` (no frames, paths or function names), and name, message and stack masked against the secret. The fallbacks are a small,
 closed set (`src/fallbacks.ts`), and a token that shares a piece with any of
 them, or with the tool list, is refused when the gateway is created.
 
