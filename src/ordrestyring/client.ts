@@ -126,13 +126,35 @@ export class OrdrestyringClient {
   }
 }
 
-/** A network failure in our own words: only a system error code from the cause, never a message. */
+/** System error codes a network error may name: a fixed list, so no other text from a cause is ever shown. */
+const SHOWN_NETWORK_CODES: ReadonlySet<string> = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_SOCKET',
+  'CERT_HAS_EXPIRED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/** A network failure in our own words: only a system error code from a fixed list, never a message. */
 function transportError(url: string, error: unknown, timeoutMs: number): Error {
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
     return new Error(`Ordrestyring GraphQL request timed out after ${timeoutMs} ms (POST ${describeUrl(url)}).`);
   }
   const code = error instanceof Error ? (error.cause as { code?: unknown } | undefined)?.code : undefined;
-  const shown = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code) ? ` (${code})` : '';
+  const shown = typeof code === 'string' && SHOWN_NETWORK_CODES.has(code) ? ` (${code})` : '';
   return new Error(`Network error calling Ordrestyring GraphQL (POST ${describeUrl(url)})${shown}.`);
 }
 
