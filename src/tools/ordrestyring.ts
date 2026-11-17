@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
-import { formatUnknownError } from '../errors.js';
+import { formatUnknownError, nestedFailureText } from '../errors.js';
 import { writeAuditEvent } from '../ordrestyring/audit.js';
 import {
   DRY_RUN_TOOL_ANNOTATIONS,
@@ -2292,7 +2292,8 @@ async function readSection<T>(call: () => Promise<T>): Promise<T | { error: stri
   try {
     return await call();
   } catch (error) {
-    return { error: formatUnknownError(error) };
+    // The status or the error count, or our own message: never Ordrestyring's text.
+    return { error: nestedFailureText(error) };
   }
 }
 
