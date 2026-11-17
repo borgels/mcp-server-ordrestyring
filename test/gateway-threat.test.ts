@@ -59,7 +59,7 @@ describe('the threat model, through callTool', () => {
     for (let i = 0; i < answers.length; i += 1) {
       const result = await gateway.callTool('check_connection', {});
       expect(result.isError, result.content[0]?.text).toBeUndefined();
-      expect(result.structuredContent).toEqual({ ok: true, typename: '[REDACTED]' });
+      expect(result.structuredContent).toEqual({ ok: true, typename: '‹redacted›' });
       expectValidJson(result);
       expect(JSON.stringify(result)).not.toMatch(/234567|12345678/);
     }
@@ -152,5 +152,88 @@ describe('the threat model, through callTool', () => {
     expect(result.isError, result.content[0]?.text).toBeUndefined();
     expect(JSON.stringify(result)).toContain('[nested too deep]');
     expectValidJson(result);
+  });
+});
+
+describe('round 5 of the threat model, through callTool', () => {
+  function pieces(value: string): string[] {
+    const out: string[] = [];
+    for (let i = 0; i + 6 <= value.length; i += 1) out.push(value.slice(i, i + 6));
+    return out;
+  }
+
+  it('refuses a token that overlaps the redaction marker, and redacts one that looks like the old marker', async () => {
+    for (const apiToken of ['‹redacted›-0123456789', 'my-redacted-value', 'xx-dacted›-yy']) {
+      expect(() => createOrdrestyringGateway({ apiToken, baseUrl: BASE, timeoutMs: 5_000 }), apiToken).toThrow(/redaction marker/);
+    }
+    const LOOKALIKE = 'REDACTED-0123456789';
+    const records: unknown[] = [];
+    const gateway = createOrdrestyringGateway({
+      apiToken: LOOKALIKE,
+      baseUrl: BASE,
+      timeoutMs: 5_000,
+      fetchImpl: upstream(() => json({ data: { __typename: `Query ${LOOKALIKE}` } })),
+      policy: { audit: record => void records.push(record) },
+    });
+    const result = await gateway.callTool('check_connection', {}, { caller: LOOKALIKE });
+    expectValidJson(result);
+    const text = JSON.stringify([result, records]);
+    for (const piece of pieces(LOOKALIKE)) expect(text, piece).not.toContain(piece);
+  });
+
+  it('keeps the result text valid JSON when a piece of the token is JSON syntax', async () => {
+    const JSONISH = 'x"ok": y-0123456789';
+    const gateway = createOrdrestyringGateway({
+      apiToken: JSONISH,
+      baseUrl: BASE,
+      timeoutMs: 5_000,
+      fetchImpl: upstream(() => json({ data: { __typename: 'Query' } })),
+    });
+    const result = await gateway.callTool('check_connection', {});
+    expect(result.isError, result.content[0]?.text).toBeUndefined();
+    expectValidJson(result);
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ ok: true, typename: 'Query' });
+  });
+
+  it('redacts an audit sink failure that quotes the token', async () => {
+    const VALUE = 'plainvalue-5555666677';
+    const gateway = createOrdrestyringGateway({
+      apiToken: VALUE,
+      baseUrl: BASE,
+      timeoutMs: 5_000,
+      fetchImpl: upstream(() => json({ data: { __typename: 'Query' } })),
+      policy: {
+        audit: () => {
+          throw new Error(`sink failed for ${VALUE}`);
+        },
+      },
+    });
+    const result = await gateway.callTool('check_connection', {});
+    expect(result.isError).toBe(true);
+    for (const piece of pieces(VALUE)) expect(JSON.stringify(result), piece).not.toContain(piece);
+  });
+
+  it('gives our own text when the body of a failed response cannot be read', async () => {
+    const VALUE = 'plainvalue-0123456789';
+    const gateway = createOrdrestyringGateway({
+      apiToken: VALUE,
+      baseUrl: BASE,
+      timeoutMs: 5_000,
+      fetchImpl: upstream(
+        () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error(`Vendor diagnostic ${VALUE.slice(0, 5)}`));
+              },
+            }),
+            { status: 500, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    });
+    const result = await gateway.callTool('check_connection', {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/HTTP 500/);
+    expect(JSON.stringify(result)).not.toContain('Vendor');
   });
 });
