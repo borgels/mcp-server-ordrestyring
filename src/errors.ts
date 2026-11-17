@@ -167,6 +167,44 @@ export function limitDepth(value: unknown, depth = 0): unknown {
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, limitDepth(entry, depth + 1)]));
 }
 
+/** Keys whose value is a failure context: anything inside that carries an error or a message is a failure. */
+const FAILURE_CONTEXTS = new Set(['failures', 'failure', 'errors', 'error', 'metadata', 'warnings', 'amount']);
+/** Fields that make an object in a failure context a failure. */
+const FAILURE_FIELDS = ['error', 'errors', 'message', 'detail', 'description'];
+
+/**
+ * Copy of a successful body with every failure reported inside it reduced to
+ * its HTTP status and our own text. A failure is an object with a numeric
+ * `status` of 400 or more, an object with an `error` field, or an
+ * object in a failure context (`failures[]`, `errors[]`, `metadata`, `amount`
+ * and the like) with any of `error`, `errors`, `message`, `detail` or
+ * `description`. Its message, code, detail and every other field are
+ * dropped. Depth-limited.
+ */
+export function nestedFailuresAsStatus(value: unknown, depth = 0, context = false): unknown {
+  if (depth > 64) {
+    return '[nested too deep]';
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(entry => nestedFailuresAsStatus(entry, depth + 1, context));
+  }
+  const record = value as Record<string, unknown>;
+  const status = record.status;
+  const failedStatus = typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599;
+  const present = (field: string) => Object.hasOwn(record, field) && record[field] !== null && record[field] !== undefined;
+  if (failedStatus || present('error') || (context && FAILURE_FIELDS.some(present))) {
+    return failedStatus
+      ? { status, error: `Ordrestyring reported a failure with HTTP ${status}.` }
+      : { error: 'Ordrestyring reported a failure.' };
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, nestedFailuresAsStatus(entry, depth + 1, FAILURE_CONTEXTS.has(key))]),
+  );
+}
+
 /**
  * Text for a failure kept inside a result that is otherwise returned (one
  * section of a combined read): the HTTP status, the GraphQL error count, or
