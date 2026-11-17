@@ -1,14 +1,31 @@
-import { redactRegisteredSecrets, truncate } from './upstream-http.js';
+/**
+ * Errors and redaction.
+ *
+ * The rule: no text Ordrestyring controls ever reaches a host, a result or an
+ * audit record through an error. An HTTP error carries the status, our own
+ * hint and the parsed Retry-After and rate-limit numbers; a GraphQL error
+ * carries the number of errors; never a response body, an error message or
+ * path from Ordrestyring, or a redirect's Location. Ordrestyring's text can
+ * quote the request or part of the token, and no redactor recognises every
+ * fragment.
+ *
+ * Redaction is the second line: the token of the instance in scope (its
+ * exact value, URL- and JSON-encoded forms, and any fragment of
+ * FRAGMENT_LENGTH characters or more) is redacted from everything returned,
+ * on structured values before they are serialised.
+ */
+import { redactRegisteredSecrets } from './upstream-http.js';
 
-export { MIN_SECRET_LENGTH } from './upstream-http.js';
+export { FRAGMENT_LENGTH, MIN_SECRET_LENGTH } from './upstream-http.js';
 
+/** Values nested deeper than this are replaced by redactDeep, never passed on. */
+export const MAX_REDACT_DEPTH = 64;
+
+/** A GraphQL error as Ordrestyring sends it; read only to count. */
 export interface OrdrestyringGraphQLErrorPayload {
   message?: string;
   type?: string;
-  locations?: Array<{ line?: number; column?: number }>;
   path?: Array<string | number>;
-  validation?: Record<string, string[]>;
-  extensions?: Record<string, unknown>;
 }
 
 const SECRET_PATTERNS = [
@@ -17,10 +34,18 @@ const SECRET_PATTERNS = [
   /Bearer\s+[A-Za-z0-9._~+/-]+=*/g,
 ];
 
+/** Our own guidance per HTTP status. */
+const STATUS_HINTS: Record<number, string> = {
+  401: 'The API token was rejected (invalid or expired).',
+  403: 'The API token has no access to this. Retrying will not help.',
+  429: 'Ordrestyring is throttling requests. Wait and retry later.',
+};
+
+/** An HTTP error from Ordrestyring: the status and the numbers from its headers. Nothing of the body is kept. */
 export class OrdrestyringHttpError extends Error {
   readonly status: number;
   readonly url: string;
-  readonly payload?: unknown;
+  /** Seconds to wait, parsed from Retry-After; undefined when absent or not a number of seconds. */
   readonly retryAfter?: string;
   readonly rateLimitLimit?: string;
   readonly rateLimitRemaining?: string;
@@ -28,32 +53,45 @@ export class OrdrestyringHttpError extends Error {
   constructor(input: {
     status: number;
     url: string;
-    payload?: unknown;
     retryAfter?: string;
     rateLimitLimit?: string;
     rateLimitRemaining?: string;
-    fallbackMessage?: string;
   }) {
-    super(formatOrdrestyringHttpError(input));
+    const retryAfter = wholeNumber(input.retryAfter);
+    const rateLimitLimit = wholeNumber(input.rateLimitLimit);
+    const rateLimitRemaining = wholeNumber(input.rateLimitRemaining);
+    super(
+      [
+        `Ordrestyring GraphQL request failed with HTTP ${input.status}`,
+        Object.hasOwn(STATUS_HINTS, input.status) ? STATUS_HINTS[input.status] : undefined,
+        retryAfter === undefined ? undefined : `retry-after=${retryAfter}s`,
+        rateLimitLimit === undefined ? undefined : `rate-limit=${rateLimitLimit}`,
+        rateLimitRemaining === undefined ? undefined : `rate-limit-remaining=${rateLimitRemaining}`,
+      ]
+        .filter(Boolean)
+        .join(' | '),
+    );
     this.name = 'OrdrestyringHttpError';
     this.status = input.status;
-    this.url = redactSecrets(input.url);
-    this.payload = input.payload;
-    this.retryAfter = input.retryAfter;
-    this.rateLimitLimit = input.rateLimitLimit;
-    this.rateLimitRemaining = input.rateLimitRemaining;
+    this.url = input.url;
+    this.retryAfter = retryAfter;
+    this.rateLimitLimit = rateLimitLimit;
+    this.rateLimitRemaining = rateLimitRemaining;
   }
 }
 
+/** GraphQL errors from Ordrestyring: how many. Their messages and paths are not kept. */
 export class OrdrestyringGraphQLError extends Error {
-  readonly errors: OrdrestyringGraphQLErrorPayload[];
-  readonly data?: unknown;
+  readonly count: number;
 
-  constructor(input: { errors: OrdrestyringGraphQLErrorPayload[]; data?: unknown }) {
-    super(formatOrdrestyringGraphQLErrors(input.errors));
+  constructor(input: { errors: OrdrestyringGraphQLErrorPayload[] }) {
+    const count = Array.isArray(input.errors) ? input.errors.length : 0;
+    super(
+      `Ordrestyring GraphQL returned ${count} error${count === 1 ? '' : 's'}. ` +
+        'The query or its arguments were not accepted; check the ids and filters.',
+    );
     this.name = 'OrdrestyringGraphQLError';
-    this.errors = input.errors;
-    this.data = input.data;
+    this.count = count;
   }
 }
 
@@ -81,60 +119,48 @@ export function redactSecrets(value: string): string {
   );
 }
 
-function formatOrdrestyringHttpError(input: {
-  status: number;
-  url: string;
-  payload?: unknown;
-  retryAfter?: string;
-  rateLimitLimit?: string;
-  rateLimitRemaining?: string;
-  fallbackMessage?: string;
-}): string {
-  const parts = [
-    `Ordrestyring GraphQL request failed with HTTP ${input.status}`,
-    // Each header value is redacted before it is cut short: a cut secret would no longer match.
-    input.retryAfter ? `retry-after=${truncate(redactSecrets(input.retryAfter), 64)}s` : undefined,
-    input.rateLimitLimit ? `rate-limit=${truncate(redactSecrets(input.rateLimitLimit), 64)}` : undefined,
-    input.rateLimitRemaining
-      ? `rate-limit-remaining=${truncate(redactSecrets(input.rateLimitRemaining), 64)}`
-      : undefined,
-    graphqlErrorsText(input.payload),
-    // Redact before truncating, so a secret is never cut in half and left partly visible.
-    input.fallbackMessage === undefined ? undefined : truncate(redactSecrets(input.fallbackMessage.trim())),
-  ].filter(Boolean);
-
-  return redactSecrets(parts.join(' | '));
+/**
+ * Copy of a JSON-like value with every string, object keys included, passed
+ * through redactSecrets. Redact a value with this before it is serialised:
+ * a serialised secret is escaped, and the escaped form is easy to miss.
+ * Anything nested deeper than MAX_REDACT_DEPTH is replaced, never passed on.
+ */
+export function redactDeep(value: unknown, depth = 0): unknown {
+  if (depth > MAX_REDACT_DEPTH) {
+    return '[nested too deep]';
+  }
+  if (typeof value === 'string') {
+    return redactSecrets(value);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(entry => redactDeep(entry, depth + 1));
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [redactSecrets(key), redactDeep(entry, depth + 1)]),
+  );
 }
 
-const MAX_GRAPHQL_ERRORS = 10;
-
-function formatOrdrestyringGraphQLErrors(errors: OrdrestyringGraphQLErrorPayload[]): string {
-  const text = errors
-    .slice(0, MAX_GRAPHQL_ERRORS)
-    .map(error =>
-      [
-        error.message ?? 'GraphQL error',
-        error.type ? `type=${error.type}` : undefined,
-        error.path?.length ? `path=${error.path.join('.')}` : undefined,
-      ]
-        .filter(Boolean)
-        .join(' '),
-    )
-    .map(entry => truncate(redactSecrets(entry)))
-    .join(' | ');
-
-  return redactSecrets(text || 'Ordrestyring GraphQL returned errors.');
+/**
+ * Text for a failure kept inside a result that is otherwise returned (one
+ * section of a combined read): the HTTP status, the GraphQL error count, or
+ * this server's own message, redacted. This server's error messages carry no
+ * Ordrestyring text (see the top of this file).
+ */
+export function nestedFailureText(error: unknown): string {
+  if (error instanceof OrdrestyringHttpError) {
+    return `Ordrestyring GraphQL request failed with HTTP ${error.status}`;
+  }
+  if (error instanceof OrdrestyringGraphQLError) {
+    return error.message;
+  }
+  return formatUnknownError(error);
 }
 
-function graphqlErrorsText(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== 'object') {
-    return undefined;
-  }
-
-  const errors = (payload as { errors?: unknown }).errors;
-  if (!Array.isArray(errors)) {
-    return undefined;
-  }
-
-  return formatOrdrestyringGraphQLErrors(errors as OrdrestyringGraphQLErrorPayload[]);
+/** A header value that is a whole number of at most 9 digits, as text; anything else is dropped. */
+function wholeNumber(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && /^\d{1,9}$/.test(trimmed) ? String(Number(trimmed)) : undefined;
 }
