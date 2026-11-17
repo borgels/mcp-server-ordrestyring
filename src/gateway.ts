@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
-import { formatUnknownError, MIN_SECRET_LENGTH } from './errors.js';
+import { formatUnknownError, MAX_REDACT_DEPTH, MIN_SECRET_LENGTH } from './errors.js';
 import { writeAuditEvent } from './ordrestyring/audit.js';
 import { DEFAULT_BASE_URL, OrdrestyringClient, type OrdrestyringClientOptions } from './ordrestyring/client.js';
 import {
@@ -14,7 +14,7 @@ import {
   type ResolvedInstancePolicy,
 } from './ordrestyring/scope.js';
 import { registerOrdrestyringTools } from './tools/ordrestyring.js';
-import { SecretRedactor, truncate } from './upstream-http.js';
+import { SecretRedactor } from './upstream-http.js';
 
 /**
  * Embeddable entry point (package export `./gateway`): an embedding host,
@@ -309,7 +309,7 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
   let policy: ResolvedInstancePolicy | undefined;
   let client: OrdrestyringClient;
   try {
-    policy = hostPolicy === undefined ? undefined : resolveInstancePolicy(hostPolicy, GATEWAY_TOOL_NAMES, text => redactor.redact(text));
+    policy = hostPolicy === undefined ? undefined : resolveInstancePolicy(hostPolicy, GATEWAY_TOOL_NAMES);
     client = new OrdrestyringClient({
       ...clientOptions,
       apiToken,
@@ -319,9 +319,11 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new GatewayConfigError(truncate(redactor.redact(message), 500));
+    // This server's messages quote no configuration value; redacted all the same, and never cut.
+    throw new GatewayConfigError(redactor.redact(message));
   }
   const handlers = registeredTools(client);
+  const prepareSecret = randomBytes(32);
 
   return {
     /** Tools enabled on this instance (tools the host's policy disables are left out). */
@@ -334,6 +336,7 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
           redactor,
           caller: contextValue(context?.caller, redactor),
           requestId: contextValue(context?.requestId, redactor) ?? randomUUID(),
+          prepareSecret,
         },
         // The whole result, text and data (keys included), with this instance's token redacted: upstream data can
         // echo it, and so can an error.
@@ -360,24 +363,27 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
         return errorResult(formatUnknownError(`Invalid input for ${short}: ${z.prettifyError(parsed.error)}`));
       }
 
-      return normalizeResult(await tool.handler(parsed.data as Record<string, unknown>));
+      return normalizeResult(await tool.handler(parsed.data as Record<string, unknown>), redactor);
     } catch (error) {
       return errorResult(formatUnknownError(error));
     }
   }
 }
 
-/** A copy of a JSON value with every string, object keys included, passed through the redactor. */
+/**
+ * A copy of a JSON value with every string, object keys included, passed
+ * through the redactor. Anything nested deeper than MAX_REDACT_DEPTH is
+ * replaced, never passed on.
+ */
 function redactDeep(value: unknown, redactor: SecretRedactor, depth = 0): unknown {
+  if (depth > MAX_REDACT_DEPTH) {
+    return '[nested too deep]';
+  }
   if (typeof value === 'string') {
     return redactor.redact(value);
   }
   if (typeof value !== 'object' || value === null) {
     return value;
-  }
-  if (depth > 64) {
-    // Deeper than any Ordrestyring answer: dropped rather than passed on unredacted.
-    return null;
   }
   if (Array.isArray(value)) {
     return value.map(entry => redactDeep(entry, redactor, depth + 1));
@@ -390,25 +396,36 @@ function redactDeep(value: unknown, redactor: SecretRedactor, depth = 0): unknow
 /** One gateway instance, as returned by createOrdrestyringGateway. */
 export type OrdrestyringGateway = ReturnType<typeof createOrdrestyringGateway>;
 
-function normalizeResult(result: unknown): GatewayToolResult {
+/**
+ * The handler's result as the gateway returns it. The handler's text is
+ * never kept: its data is parsed, redacted (values and keys), and only then
+ * serialised again, so a token cannot survive in an escaped form.
+ */
+function normalizeResult(result: unknown, redactor: SecretRedactor): GatewayToolResult {
   if (!result || typeof result !== 'object' || !Array.isArray((result as { content?: unknown }).content)) {
-    return jsonResult('Ordrestyring gateway result.', toGatewayJson(result));
+    return jsonResult('Ordrestyring gateway result.', redactDeep(toGatewayJson(result), redactor));
   }
 
-  const content = (result as { content: Array<{ type: 'text'; text: string }> }).content;
+  const content = (result as { content: Array<{ type?: unknown; text?: unknown }> }).content;
   const text = content[0]?.text;
-  if (typeof text !== 'string') {
-    return { content };
+  if (typeof text === 'string') {
+    let data: unknown;
+    try {
+      data = JSON.parse(text) as unknown;
+    } catch {
+      data = undefined;
+    }
+    if (data !== undefined) {
+      const safe = redactDeep(data, redactor);
+      return { content: [{ type: 'text', text: JSON.stringify(safe, null, 2) }], structuredContent: toGatewayJson(safe) };
+    }
   }
-
-  try {
-    return {
-      content,
-      structuredContent: toGatewayJson(JSON.parse(text)),
-    };
-  } catch {
-    return { content };
-  }
+  // Not JSON: each text redacted on its own.
+  return {
+    content: content
+      .filter((entry): entry is { type: 'text'; text: string } => typeof entry.text === 'string')
+      .map(entry => ({ type: 'text' as const, text: redactor.redact(entry.text) })),
+  };
 }
 
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
