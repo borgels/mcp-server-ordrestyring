@@ -14,7 +14,7 @@ import {
   type ResolvedInstancePolicy,
 } from './ordrestyring/scope.js';
 import { registerOrdrestyringTools } from './tools/ordrestyring.js';
-import { SecretRedactor } from './upstream-http.js';
+import { overlapsMarker, REDACTION_MARKER, SecretRedactor } from './upstream-http.js';
 
 /**
  * Embeddable entry point (package export `./gateway`): an embedding host,
@@ -288,6 +288,12 @@ function requiredToken(options: OrdrestyringGatewayOptions | undefined): string 
       `createOrdrestyringGateway requires an apiToken of at least ${MIN_SECRET_LENGTH} characters.`,
     );
   }
+  // A token that overlaps the redaction marker would survive its own redaction.
+  if (overlapsMarker(value.trim())) {
+    throw new GatewayConfigError(
+      `createOrdrestyringGateway cannot use this apiToken: it overlaps the redaction marker ${REDACTION_MARKER}.`,
+    );
+  }
   return value.trim();
 }
 
@@ -338,10 +344,13 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
           requestId: contextValue(context?.requestId, redactor) ?? randomUUID(),
           prepareSecret,
         },
-        // The whole result, text and data (keys included, numbers by their string form), with this instance's token
-        // redacted: upstream data can echo it, and so can an error. normalizeResult has already rebuilt a JSON text
-        // from redacted data, so this pass finds nothing in it to break.
-        () => runCall(toolName, input).then(result => redactDeep(result, redactor) as GatewayToolResult),
+        // A successful result is already redacted as data by normalizeResult, and its JSON text is built from that
+        // data: it is not redacted again as text, which could break the JSON. An error result is our own text, and
+        // is redacted as a whole.
+        () =>
+          runCall(toolName, input).then(result =>
+            result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result,
+          ),
       );
     },
   };
@@ -374,7 +383,7 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
 /**
  * A copy of a JSON value with every string, object keys included, passed
  * through the redactor, and every number or boolean whose string form would
- * be redacted replaced by the string "[REDACTED]". Anything nested deeper
+ * be redacted replaced by the string "‹redacted›". Anything nested deeper
  * than MAX_REDACT_DEPTH is replaced, never passed on.
  */
 function redactDeep(value: unknown, redactor: SecretRedactor, depth = 0): unknown {
@@ -385,9 +394,9 @@ function redactDeep(value: unknown, redactor: SecretRedactor, depth = 0): unknow
     return redactor.redact(value);
   }
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    // The string form of a primitive is checked too; a match becomes the string "[REDACTED]", so JSON stays valid.
+    // The string form of a primitive is checked too; a match becomes the string "‹redacted›", so JSON stays valid.
     const text = String(value);
-    if (redactor.redact(text) !== text) return '[REDACTED]';
+    if (redactor.redact(text) !== text) return '‹redacted›';
     return typeof value === 'bigint' ? text : value;
   }
   if (typeof value !== 'object' || value === null) {
