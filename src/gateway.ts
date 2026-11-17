@@ -338,8 +338,9 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
           requestId: contextValue(context?.requestId, redactor) ?? randomUUID(),
           prepareSecret,
         },
-        // The whole result, text and data (keys included), with this instance's token redacted: upstream data can
-        // echo it, and so can an error.
+        // The whole result, text and data (keys included, numbers by their string form), with this instance's token
+        // redacted: upstream data can echo it, and so can an error. normalizeResult has already rebuilt a JSON text
+        // from redacted data, so this pass finds nothing in it to break.
         () => runCall(toolName, input).then(result => redactDeep(result, redactor) as GatewayToolResult),
       );
     },
@@ -372,8 +373,9 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
 
 /**
  * A copy of a JSON value with every string, object keys included, passed
- * through the redactor. Anything nested deeper than MAX_REDACT_DEPTH is
- * replaced, never passed on.
+ * through the redactor, and every number or boolean whose string form would
+ * be redacted replaced by the string "[REDACTED]". Anything nested deeper
+ * than MAX_REDACT_DEPTH is replaced, never passed on.
  */
 function redactDeep(value: unknown, redactor: SecretRedactor, depth = 0): unknown {
   if (depth > MAX_REDACT_DEPTH) {
@@ -382,8 +384,18 @@ function redactDeep(value: unknown, redactor: SecretRedactor, depth = 0): unknow
   if (typeof value === 'string') {
     return redactor.redact(value);
   }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    // The string form of a primitive is checked too; a match becomes the string "[REDACTED]", so JSON stays valid.
+    const text = String(value);
+    if (redactor.redact(text) !== text) return '[REDACTED]';
+    return typeof value === 'bigint' ? text : value;
+  }
   if (typeof value !== 'object' || value === null) {
     return value;
+  }
+  const json = (value as { toJSON?: unknown }).toJSON;
+  if (typeof json === 'function') {
+    return redactDeep(json.call(value), redactor, depth + 1);
   }
   if (Array.isArray(value)) {
     return value.map(entry => redactDeep(entry, redactor, depth + 1));
@@ -403,7 +415,7 @@ export type OrdrestyringGateway = ReturnType<typeof createOrdrestyringGateway>;
  */
 function normalizeResult(result: unknown, redactor: SecretRedactor): GatewayToolResult {
   if (!result || typeof result !== 'object' || !Array.isArray((result as { content?: unknown }).content)) {
-    return jsonResult('Ordrestyring gateway result.', redactDeep(toGatewayJson(result), redactor));
+    return jsonResult('Ordrestyring gateway result.', redactDeep(result, redactor));
   }
 
   const content = (result as { content: Array<{ type?: unknown; text?: unknown }> }).content;
