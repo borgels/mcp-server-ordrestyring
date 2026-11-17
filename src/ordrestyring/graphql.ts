@@ -59,7 +59,8 @@ function parseSingleOperation(query: string, operationName?: string): ParsedOper
   try {
     document = parse(query);
   } catch (error) {
-    throw new Error(`Invalid GraphQL document: ${error instanceof Error ? error.message : String(error)}`);
+    // The document is built from the schema's names; the parser's message would quote them.
+    throw new Error('The GraphQL document for Ordrestyring is not valid.');
   }
 
   const operations = document.definitions.filter(
