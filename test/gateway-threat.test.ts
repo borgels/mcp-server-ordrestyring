@@ -282,9 +282,9 @@ describe('round 6 of the threat model', () => {
         rows: [{ status: 200, message: 'kept' }],
       }),
     ).toEqual({
-      failures: [{ status: 403, error: 'Ordrestyring reported a failure with HTTP 403.' }],
+      failures: [{ status: 403, message: 'Ordrestyring reported a failure with HTTP 403.' }],
       metadata: { status: 401, error: 'Ordrestyring reported a failure with HTTP 401.' },
-      errors: [{ error: 'Ordrestyring reported a failure.' }],
+      errors: [{ message: 'Ordrestyring reported a failure.' }],
       rows: [{ status: 200, message: 'kept' }],
     });
   });
