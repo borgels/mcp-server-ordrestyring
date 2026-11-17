@@ -4,11 +4,9 @@ import {
   describeUrl,
   discardBody,
   isRedirect,
-  readErrorBody,
   redirectRefusedMessage,
   registerSecret,
   SecretRedactor,
-  truncate,
 } from '../upstream-http.js';
 
 /** The Ordrestyring GraphQL API. */
@@ -62,7 +60,7 @@ export class OrdrestyringClient {
       registerSecret(this.apiToken);
     }
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? env.ORDRESTYRING_BASE_URL ?? DEFAULT_BASE_URL);
-    assertSafeBaseUrl(this.baseUrl, this.redactor);
+    assertSafeBaseUrl(this.baseUrl);
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs =
       options.timeoutMs ?? readEnvInteger('ORDRESTYRING_TIMEOUT_MS', 30_000, { min: 1, max: 600_000 });
@@ -72,10 +70,7 @@ export class OrdrestyringClient {
     const response = await this.rawGraphql<T>(request);
 
     if (response.errors?.length) {
-      throw new OrdrestyringGraphQLError({
-        errors: response.errors as never,
-        data: response.data,
-      });
+      throw new OrdrestyringGraphQLError({ errors: response.errors as never });
     }
 
     return response.data as T;
@@ -87,7 +82,9 @@ export class OrdrestyringClient {
     }
 
     const url = `${this.baseUrl}/graphql`;
-    const response = await this.fetchImpl(url, {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -104,6 +101,9 @@ export class OrdrestyringClient {
       redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
+    } catch (error) {
+      throw transportError(url, error, this.timeoutMs);
+    }
 
     if (isRedirect(response.status)) {
       await discardBody(response);
@@ -111,20 +111,29 @@ export class OrdrestyringClient {
     }
 
     if (!response.ok) {
-      const responseBody = await readErrorBody(response);
+      // The body is Ordrestyring's text: it is never read into an error, a result or an audit record.
+      await discardBody(response);
       throw new OrdrestyringHttpError({
         status: response.status,
         url: describeUrl(url),
-        payload: responseBody,
         retryAfter: response.headers.get('retry-after') ?? undefined,
         rateLimitLimit: response.headers.get('x-ratelimit-limit') ?? undefined,
         rateLimitRemaining: response.headers.get('x-ratelimit-remaining') ?? undefined,
-        fallbackMessage: typeof responseBody === 'string' ? responseBody : undefined,
       });
     }
 
     return (await readResponseBody(response)) as GraphQLResponse<T>;
   }
+}
+
+/** A network failure in our own words: only a system error code from the cause, never a message. */
+function transportError(url: string, error: unknown, timeoutMs: number): Error {
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return new Error(`Ordrestyring GraphQL request timed out after ${timeoutMs} ms (POST ${describeUrl(url)}).`);
+  }
+  const code = error instanceof Error ? (error.cause as { code?: unknown } | undefined)?.code : undefined;
+  const shown = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code) ? ` (${code})` : '';
+  return new Error(`Network error calling Ordrestyring GraphQL (POST ${describeUrl(url)})${shown}.`);
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
@@ -155,13 +164,14 @@ function trimTrailingSlash(value: string): string {
   return value.slice(0, end);
 }
 
-function assertSafeBaseUrl(baseUrl: string, redactor: SecretRedactor): void {
+function assertSafeBaseUrl(baseUrl: string): void {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
   } catch {
     // Redacted before it is cut short: the value is configuration and could hold the token.
-    throw new Error(`The Ordrestyring base URL is not a valid URL: ${truncate(redactor.redact(baseUrl), 200)}`);
+    // The value is not quoted: configuration is never echoed, not even shortened.
+    throw new Error('The Ordrestyring base URL is not a valid URL.');
   }
 
   if (parsed.protocol === 'https:') {
@@ -173,7 +183,7 @@ function assertSafeBaseUrl(baseUrl: string, redactor: SecretRedactor): void {
   }
 
   throw new Error(
-    `Refusing to send the Ordrestyring API token over ${parsed.protocol}//. Use https:// (loopback http:// is allowed for local mocks).`,
+    'Refusing to send the Ordrestyring API token over a connection that is not https. Use https:// (loopback http:// is allowed for local mocks).',
   );
 }
 
