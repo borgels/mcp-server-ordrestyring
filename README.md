@@ -304,8 +304,12 @@ intentionally.
 
 Credentials are read only from the MCP server environment and are never accepted
 as tool arguments. Requests to Ordrestyring never follow redirects, so the token
-is not re-sent to another location; error bodies are read up to 64 KB and
-shortened after redaction. Report suspected vulnerabilities privately to
+is not re-sent to another location. Errors carry no text from Ordrestyring: an
+HTTP error gives the status, our hint and the parsed Retry-After and rate-limit
+numbers (the body is discarded unread), a GraphQL error gives the number of
+errors, a redirect error does not quote the `Location`, a network error names
+only a system error code, and configuration errors do not quote the rejected
+value. Report suspected vulnerabilities privately to
 <security@borgels.com>. Do not include API tokens, customer data, or other
 secrets in public GitHub issues.
 
@@ -376,24 +380,18 @@ the call. Every call runs in a call scope of its own, so a call made from
 inside another instance's call never inherits that instance's policy, sink or
 redactor. There is no process-wide registry of tokens.
 
-What each instance redacts with its own token (the exact value and its
-URL-encoded form; credential-shaped `token=`/`Authorization:` pairs as well in
-errors and audit records):
+Each instance redacts its own token from every result it returns (text and
+structured data, object keys included), from every audit record, and from
+errors about its options: the exact value, its URL- and JSON-encoded forms,
+and any piece of it of 6 characters or more. Structured data is redacted
+before it is serialised; the handler's own text is never kept.
+`test/gateway-leaks.test.ts` proves this through every channel with one
+token that has a quote and a backslash.
 
-- every result it returns, successful or not: the text and the structured data,
-  object keys included;
-- every audit record, keys included;
-- errors about its options (policy, base URL), thrown as `GatewayConfigError`.
-
-Values are redacted before they are cut short (tool names, call context,
-header values, configuration), so no part of a token is left after a cut.
-Redaction works on the exact token: a fragment of it that Ordrestyring itself
-returns is not recognised. A host that shows results to people should not
-pass on upstream error text as it is.
-
-The timeout is still read from `ORDRESTYRING_TIMEOUT_MS` when `timeoutMs` is
-not given; it is a limit, not a credential or policy. Pass `timeoutMs` to
-read nothing from the environment.
+Under a host policy with `timeoutMs` given, an instance reads nothing from
+the environment: prepared-mutation hashes use a random key of the instance
+(not `ORDRESTYRING_PREPARE_SECRET`). Without `timeoutMs` the timeout is read
+from `ORDRESTYRING_TIMEOUT_MS`; it is a limit, not a credential or policy.
 
 First-wedge gateway tools:
 
