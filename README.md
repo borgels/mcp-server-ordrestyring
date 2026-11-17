@@ -345,14 +345,37 @@ The MCP endpoint is `POST http://127.0.0.1:3000/mcp`.
 ## Gateway Export
 
 `mcp-server-ordrestyring/gateway` exposes a small typed adapter for host
-applications that need to wrap this server without copying connector logic.
+applications that need to wrap this server without copying connector logic,
+in the same shape as `mcp-server-template`. One process can run several
+gateway instances, for example one per tenant.
 
 The gateway exports:
 
 - `ordrestyringGatewayTools`: stable unprefixed tool definitions with name,
-  title, description, risk level, default enablement, and JSON input schema.
-- `createOrdrestyringGateway(options)`: a factory that accepts the same
-  credential, base URL, timeout, and `fetchImpl` options as `OrdrestyringClient`.
+  title, description, risk level, default enablement, and JSON input schema
+  (derived from the zod schemas the calls are validated with).
+- `ordrestyringToolCatalog`: the same tools as a deeply frozen catalog, with
+  the GraphQL requests each tool may make (`upstream`: `query` or `mutation`
+  on `POST /graphql`) and the `broad` mark. No gateway tool is broad: the free
+  GraphQL read and the schema tools are not in the gateway.
+- `createOrdrestyringGateway({ apiToken, baseUrl?, timeoutMs?, fetchImpl?, policy? })`:
+  `apiToken` is required (at least 8 characters) and is never read from
+  `ORDRESTYRING_API_TOKEN`; `baseUrl` defaults to
+  `https://graphql.ordrestyring.dk` and is never read from
+  `ORDRESTYRING_BASE_URL`.
+- `callTool(name, input, { caller, requestId })`: input is validated before
+  anything is sent, and unknown fields are refused. `caller` and `requestId`
+  go into the audit records of the call.
+
+With `policy: { enableWrites, disabledTools, audit }` the host decides the
+instance's policy: the instance then reads none of
+`ORDRESTYRING_ENABLE_WRITES`, `ORDRESTYRING_POLICY_PATH` or
+`ORDRESTYRING_AUDIT_LOG`, leaves the disabled tools out of `tools`, and sends
+its audit records to `audit` (none without it). A sink that throws refuses
+the call. Every call runs in a call scope of its own, so a call made from
+inside another instance's call never inherits that instance's policy, sink or
+redactor. Each instance redacts errors and audit records with its own token;
+there is no process-wide registry of tokens.
 
 First-wedge gateway tools:
 
@@ -364,10 +387,11 @@ First-wedge gateway tools:
 - `create_customer` (disabled by default)
 - `delete_products` (disabled by default, destructive)
 
-The gateway reads credentials from the server environment or factory options,
-never from tool arguments. Write tools remain disabled unless
-`ORDRESTYRING_ENABLE_WRITES=true` and the write policy allows the underlying
-mutation. The gateway keeps the same safety model as the full MCP server.
+The gateway reads credentials only from the factory options, never from the
+environment or from tool arguments. Without a host policy, write tools remain
+disabled unless `ORDRESTYRING_ENABLE_WRITES=true` and the write policy allows
+the underlying mutation; under a host policy, unless `enableWrites` is true.
+The gateway keeps the same safety model as the full MCP server.
 
 ## Security model
 
