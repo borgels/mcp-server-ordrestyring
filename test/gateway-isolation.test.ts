@@ -124,8 +124,8 @@ describe('redaction of what an instance returns or throws', () => {
     expect(deleted.isError).toBeUndefined();
     expect(checked.isError).toBeUndefined();
     expect(everything(deleted, checked)).not.toContain(TOKEN);
-    expect(everything(deleted)).toContain('key [REDACTED]');
-    expect(checked.structuredContent).toMatchObject({ typename: 'Query [REDACTED]' });
+    expect(everything(deleted)).toContain('key ‹redacted›');
+    expect(checked.structuredContent).toMatchObject({ typename: 'Query ‹redacted›' });
   });
 
   it('redacts a header value before cutting it short, in the result and in the audit record', async () => {
