@@ -78,9 +78,17 @@ export function canonicalToolName(name: string): string {
   return lower.startsWith(TOOL_PREFIX) ? lower : `${TOOL_PREFIX}${lower}`;
 }
 
-/** Check a host's policy against the known tools. Throws GatewayConfigError on anything unclear. */
-export function resolveInstancePolicy(policy: InstancePolicy, knownTools: readonly string[]): ResolvedInstancePolicy {
-  if (policy === null || typeof policy !== 'object') {
+/**
+ * Check a host's policy against the known tools. Throws GatewayConfigError on
+ * anything unclear. `redact` is the instance's redactor: a value quoted in an
+ * error is redacted before it is cut short.
+ */
+export function resolveInstancePolicy(
+  policy: InstancePolicy,
+  knownTools: readonly string[],
+  redact: (text: string) => string,
+): ResolvedInstancePolicy {
+  if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) {
     throw new GatewayConfigError('policy must be an object');
   }
   if (policy.enableWrites !== undefined && typeof policy.enableWrites !== 'boolean') {
@@ -96,7 +104,7 @@ export function resolveInstancePolicy(policy: InstancePolicy, knownTools: readon
   const disabled = new Set<string>();
   for (const name of policy.disabledTools ?? []) {
     if (typeof name !== 'string' || !known.has(canonicalToolName(name))) {
-      throw new GatewayConfigError(`policy.disabledTools names an unknown tool: ${String(name).slice(0, 100)}`);
+      throw new GatewayConfigError(`policy.disabledTools names an unknown tool: ${redact(String(name)).slice(0, 100)}`);
     }
     disabled.add(canonicalToolName(name));
   }
