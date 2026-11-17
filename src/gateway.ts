@@ -14,7 +14,8 @@ import {
   type ResolvedInstancePolicy,
 } from './ordrestyring/scope.js';
 import { registerOrdrestyringTools } from './tools/ordrestyring.js';
-import { admitsKey, keyRefusedText } from './key-admission.js';
+import { fixedOutputs, withheldResult } from './fallbacks.js';
+import { admitsKey, keyRefusedText, leaksSecret } from './key-admission.js';
 import { SecretRedactor } from './upstream-http.js';
 
 /**
@@ -282,8 +283,8 @@ function requiredToken(options: OrdrestyringGatewayOptions | undefined): string 
       'createOrdrestyringGateway requires options.apiToken. Embedded instances do not read credentials from the environment.',
     );
   }
-  // Key admission (src/key-admission.ts): a short token, or one that shares a piece with any text of ours, could
-  // survive redaction or be mistaken for our own text. It is refused with a fixed text that holds no piece of it.
+  // Key admission (src/key-admission.ts): printable ASCII of 16 characters or more, sharing no piece with any text of
+  // ours. Checked before anything is built from the token; the refusal is a fixed text that holds no piece of it.
   if (!admitsKey(value.trim())) {
     throw new GatewayConfigError(keyRefusedText(value.trim()));
   }
@@ -300,29 +301,46 @@ function contextValue(value: unknown, redactor: SecretRedactor): string | undefi
  * credential the instance uses; a missing or short token fails here.
  */
 export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
-  const apiToken = requiredToken(options);
-  const { policy: hostPolicy, apiToken: _token, baseUrl, ...clientOptions } = options;
-  // The redactor comes first: every error from here on, also one about the options, is redacted with it before it
-  // is cut short or thrown.
-  const redactor = new SecretRedactor().addSecret(apiToken);
-  let policy: ResolvedInstancePolicy | undefined;
-  let client: OrdrestyringClient;
-  let handlers: ReturnType<typeof registeredTools>;
+  let apiToken: string | undefined;
+  let guard: SecretRedactor | undefined;
   try {
-    policy = hostPolicy === undefined ? undefined : resolveInstancePolicy(hostPolicy, GATEWAY_TOOL_NAMES);
-    client = new OrdrestyringClient({
-      ...clientOptions,
-      apiToken,
-      baseUrl: baseUrl ?? DEFAULT_BASE_URL,
-      credentialEnv: {},
-      redactor,
-    });
-    handlers = registeredTools(client);
+    // Admission first, before a redactor is built from the token.
+    apiToken = requiredToken(options);
+    guard = new SecretRedactor().addSecret(apiToken);
+    // The fixed outputs of the sink check (src/fallbacks.ts) must hold no piece of the token.
+    if (leaksSecret(fixedOutputs(), guard)) {
+      throw new GatewayConfigError(keyRefusedText(apiToken));
+    }
+    const gateway = buildOrdrestyringGateway(options, apiToken, guard);
+    // The tool list leaves the gateway as it is: a token that shares a piece with it is refused.
+    if (leaksSecret(gateway.tools, guard)) {
+      throw new GatewayConfigError(keyRefusedText(apiToken));
+    }
+    return gateway;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    // This server's messages quote no configuration value; redacted all the same, as the last step, and never cut.
-    throw new GatewayConfigError(redactor.redact(message));
+    let message = error instanceof Error ? error.message : String(error);
+    if (guard && apiToken !== undefined) {
+      // Redacted, then checked whole as the very last step: a message that still holds a piece of the token
+      // becomes the fixed refusal.
+      message = guard.redact(message);
+      if (leaksSecret(message, guard)) message = keyRefusedText(apiToken);
+    }
+    throw new GatewayConfigError(message);
   }
+}
+
+function buildOrdrestyringGateway(options: OrdrestyringGatewayOptions, apiToken: string, redactor: SecretRedactor) {
+  const { policy: hostPolicy, apiToken: _token, baseUrl, ...clientOptions } = options;
+  const policy: ResolvedInstancePolicy | undefined =
+    hostPolicy === undefined ? undefined : resolveInstancePolicy(hostPolicy, GATEWAY_TOOL_NAMES);
+  const client = new OrdrestyringClient({
+    ...clientOptions,
+    apiToken,
+    baseUrl: baseUrl ?? DEFAULT_BASE_URL,
+    credentialEnv: {},
+    redactor,
+  });
+  const handlers = registeredTools(client);
   const prepareSecret = randomBytes(32);
 
   return {
@@ -342,9 +360,12 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
         // data: it is not redacted again as text, which could break the JSON. An error result is our own text, and
         // is redacted as a whole.
         () =>
-          runCall(toolName, input).then(result =>
-            result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result,
-          ),
+          runCall(toolName, input).then(result => {
+            const final = result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result;
+            // The sink check, as the very last step: a result that holds a piece of the token anywhere, outer fields
+            // and the JSON text included, is withheld whole.
+            return leaksSecret(final, redactor) ? withheldResult() : final;
+          }),
       );
     },
   };
