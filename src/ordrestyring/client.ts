@@ -8,6 +8,7 @@ import {
   redirectRefusedMessage,
   registerSecret,
   SecretRedactor,
+  truncate,
 } from '../upstream-http.js';
 
 /** The Ordrestyring GraphQL API. */
@@ -61,7 +62,7 @@ export class OrdrestyringClient {
       registerSecret(this.apiToken);
     }
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? env.ORDRESTYRING_BASE_URL ?? DEFAULT_BASE_URL);
-    assertSafeBaseUrl(this.baseUrl);
+    assertSafeBaseUrl(this.baseUrl, this.redactor);
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs =
       options.timeoutMs ?? readEnvInteger('ORDRESTYRING_TIMEOUT_MS', 30_000, { min: 1, max: 600_000 });
@@ -154,12 +155,13 @@ function trimTrailingSlash(value: string): string {
   return value.slice(0, end);
 }
 
-function assertSafeBaseUrl(baseUrl: string): void {
+function assertSafeBaseUrl(baseUrl: string, redactor: SecretRedactor): void {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
   } catch {
-    throw new Error(`ORDRESTYRING_BASE_URL is not a valid URL: ${baseUrl}`);
+    // Redacted before it is cut short: the value is configuration and could hold the token.
+    throw new Error(`The Ordrestyring base URL is not a valid URL: ${truncate(redactor.redact(baseUrl), 200)}`);
   }
 
   if (parsed.protocol === 'https:') {
