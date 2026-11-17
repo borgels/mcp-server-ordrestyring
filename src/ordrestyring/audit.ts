@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
-import { formatUnknownError, redactSecrets } from '../errors.js';
+import { formatUnknownError, redactDeep } from '../errors.js';
 import { currentCallContext, currentInstancePolicy } from './scope.js';
 
 export interface OrdrestyringAuditEvent {
@@ -54,7 +54,8 @@ export async function writeAuditEvent(event: OrdrestyringAuditEvent): Promise<vo
     reason: event.reason,
     error: event.error === undefined ? undefined : formatUnknownError(event.error),
   };
-  // A copy through JSON: plain data, without undefined fields, that the server does not keep.
+  // Redacted with the shared redactDeep (the call scope's redactor, numbers and depth included), then copied
+  // through JSON: plain data, without undefined fields, that the server does not keep.
   const safe = JSON.parse(JSON.stringify(redactDeep(record))) as Record<string, unknown>;
 
   if (sink) {
@@ -62,22 +63,6 @@ export async function writeAuditEvent(event: OrdrestyringAuditEvent): Promise<vo
   } else if (auditPath) {
     await appendFile(auditPath, `${JSON.stringify(safe)}\n`, 'utf8');
   }
-}
-
-/** A copy of a JSON value with every string, object keys included, redacted with the current instance's secrets. */
-export function redactDeep(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') {
-    return redactSecrets(value);
-  }
-  if (typeof value !== 'object' || value === null || depth > 20) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map(entry => redactDeep(entry, depth + 1));
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [redactSecrets(key), redactDeep(entry, depth + 1)]),
-  );
 }
 
 function hashValue(value: string): string {
