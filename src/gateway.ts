@@ -14,7 +14,7 @@ import {
   type ResolvedInstancePolicy,
 } from './ordrestyring/scope.js';
 import { registerOrdrestyringTools } from './tools/ordrestyring.js';
-import { SecretRedactor } from './upstream-http.js';
+import { SecretRedactor, truncate } from './upstream-http.js';
 
 /**
  * Embeddable entry point (package export `./gateway`): an embedding host,
@@ -303,16 +303,24 @@ function contextValue(value: unknown, redactor: SecretRedactor): string | undefi
 export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
   const apiToken = requiredToken(options);
   const { policy: hostPolicy, apiToken: _token, baseUrl, ...clientOptions } = options;
-  const policy: ResolvedInstancePolicy | undefined =
-    hostPolicy === undefined ? undefined : resolveInstancePolicy(hostPolicy, GATEWAY_TOOL_NAMES);
-  const redactor = new SecretRedactor();
-  const client = new OrdrestyringClient({
-    ...clientOptions,
-    apiToken,
-    baseUrl: baseUrl ?? DEFAULT_BASE_URL,
-    credentialEnv: {},
-    redactor,
-  });
+  // The redactor comes first: every error from here on, also one about the options, is redacted with it before it
+  // is cut short or thrown.
+  const redactor = new SecretRedactor().addSecret(apiToken);
+  let policy: ResolvedInstancePolicy | undefined;
+  let client: OrdrestyringClient;
+  try {
+    policy = hostPolicy === undefined ? undefined : resolveInstancePolicy(hostPolicy, GATEWAY_TOOL_NAMES, text => redactor.redact(text));
+    client = new OrdrestyringClient({
+      ...clientOptions,
+      apiToken,
+      baseUrl: baseUrl ?? DEFAULT_BASE_URL,
+      credentialEnv: {},
+      redactor,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new GatewayConfigError(truncate(redactor.redact(message), 500));
+  }
   const handlers = registeredTools(client);
 
   return {
@@ -327,7 +335,9 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
           caller: contextValue(context?.caller, redactor),
           requestId: contextValue(context?.requestId, redactor) ?? randomUUID(),
         },
-        () => runCall(toolName, input),
+        // The whole result, text and data (keys included), with this instance's token redacted: upstream data can
+        // echo it, and so can an error.
+        () => runCall(toolName, input).then(result => redactDeep(result, redactor) as GatewayToolResult),
       );
     },
   };
@@ -355,6 +365,26 @@ export function createOrdrestyringGateway(options: OrdrestyringGatewayOptions) {
       return errorResult(formatUnknownError(error));
     }
   }
+}
+
+/** A copy of a JSON value with every string, object keys included, passed through the redactor. */
+function redactDeep(value: unknown, redactor: SecretRedactor, depth = 0): unknown {
+  if (typeof value === 'string') {
+    return redactor.redact(value);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  if (depth > 64) {
+    // Deeper than any Ordrestyring answer: dropped rather than passed on unredacted.
+    return null;
+  }
+  if (Array.isArray(value)) {
+    return value.map(entry => redactDeep(entry, redactor, depth + 1));
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [redactor.redact(key), redactDeep(entry, redactor, depth + 1)]),
+  );
 }
 
 /** One gateway instance, as returned by createOrdrestyringGateway. */
