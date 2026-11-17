@@ -133,7 +133,44 @@ describe('failure texts', () => {
     expect(
       nestedFailuresAsStatus({ data: { failures: ['Vendor diagnostic'], errors: ['Vendor diagnostic'], amount: '12.00', name: 'kept' } }),
     ).toEqual({
-      data: { failures: ['Ordrestyring reported a failure.'], errors: ['Ordrestyring reported a failure.'], amount: '12.00', name: 'kept' },
+      data: { failures: [{ message: 'Ordrestyring reported a failure.' }], errors: [{ message: 'Ordrestyring reported a failure.' }], amount: '12.00', name: 'kept' },
+    });
+  });
+});
+
+describe('round 8', () => {
+  it('throws construction errors in final form: no frames or paths in the stack, no cause', () => {
+    for (const [apiToken, baseUrl] of [
+      ['Qz7way.jsV8k2mP9X', 'invalid'],
+      ['Qz7way.tsV8k2mP9X', 'invalid'],
+      ['short', 'invalid'],
+    ] as const) {
+      let caught: Error | undefined;
+      try {
+        createOrdrestyringGateway({ apiToken, baseUrl, timeoutMs: 1_000, policy: {} });
+      } catch (error) {
+        caught = error as Error;
+      }
+      expect(caught, apiToken).toBeInstanceOf(Error);
+      const stack = String(caught!.stack);
+      expect(stack).toBe(`${caught!.name}: ${caught!.message}`);
+      expect(stack).not.toMatch(/\n\s+at /);
+      expect((caught as { cause?: unknown }).cause).toBeUndefined();
+      expect(leaked(apiToken, [stack, caught!.message, caught!.name, caught])).toEqual([]);
+    }
+  });
+
+  it('reduces every element of a failure list, whatever its fields, also below a wrapper', () => {
+    expect(
+      nestedFailuresAsStatus({ data: { failures: [{ reason: 'Vendor diagnostic' }], errors: [{ code: 'Vendor diagnostic', status: 409 }] } }),
+    ).toEqual({
+      data: {
+        failures: [{ message: 'Ordrestyring reported a failure.' }],
+        errors: [{ status: 409, message: 'Ordrestyring reported a failure with HTTP 409.' }],
+      },
+    });
+    expect(nestedFailuresAsStatus({ failures: [{ code: 'Vendor diagnostic' }] })).toEqual({
+      failures: [{ message: 'Ordrestyring reported a failure.' }],
     });
   });
 });
