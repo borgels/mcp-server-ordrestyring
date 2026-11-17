@@ -449,9 +449,18 @@ form of numbers and booleans, are replaced by `"‹redacted›"` before anything
 is serialised, so the text stays valid JSON. A token that comes back
 otherwise transformed (split into pieces shorter than 6 characters,
 reversed, re-encoded, hashed) is not recognised. Such data reaches only the
-tenant whose token it is, which already holds it. A gateway refuses a token
-that contains the redaction marker `‹redacted›` or shares a piece of 6
-characters with it, so redaction can never leave the token in place. The
+tenant whose token it is, which already holds it. **Key admission.** Every token is a secret the vendor
+issues. A gateway refuses a token that is shorter than 16 characters or that
+shares a piece of 6 characters with any text of this server's own: every
+string literal in `src/` (markers, the depth placeholder, log prefixes, file
+names, error texts, variable names), listed in
+`src/fixed-corpus.generated.ts` by `scripts/fixed-corpus.mjs` and kept up to
+date by a test. The refusal is a fixed text that never repeats the token.
+So no text of ours can hold a piece of a token, and redaction can never leave
+one in place. On top of that, every string leaving a gateway (results,
+construction errors, whole stderr lines, archive and entry names) passes the
+instance's redactor as the very last step. Findings that rely on a token this
+rule refuses are out of scope. The
 standalone MCP server applies the same redaction to errors and audit records
 on a best-effort basis; its successful results are passed on as Ordrestyring
 returned them.
