@@ -90,8 +90,9 @@ describe('Ordrestyring gateway credentials', () => {
   });
 
   it('refuses a token shorter than the redactor protects', () => {
-    expect(() => createOrdrestyringGateway({ apiToken: 'short7!' })).toThrow(/at least 8 characters/);
-    expect(() => createOrdrestyringGateway({ apiToken: 'eight888' })).not.toThrow();
+    expect(() => createOrdrestyringGateway({ apiToken: 'short7!' })).toThrow(/key was refused/);
+    expect(() => createOrdrestyringGateway({ apiToken: '123456789012345' })).toThrow(/key was refused/);
+    expect(() => createOrdrestyringGateway({ apiToken: '1234567890123456' })).not.toThrow();
   });
 
   it('uses the Ordrestyring API, never ORDRESTYRING_BASE_URL, and only its own token', async () => {
