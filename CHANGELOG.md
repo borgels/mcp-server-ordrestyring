@@ -10,9 +10,16 @@ is guaranteed about the token and the residual risk.
 
 - `createOrdrestyringGateway` requires `apiToken` and never reads
   `ORDRESTYRING_API_TOKEN` or `ORDRESTYRING_BASE_URL`; the base URL defaults
-  to `https://graphql.ordrestyring.dk`. A token shorter than 8 characters is
-  refused, since the redactor cannot protect it. Breaking for hosts that
-  relied on the environment fallback.
+  to `https://graphql.ordrestyring.dk`. A token shorter than 16 characters,
+  or one that shares a piece of 6 characters with any of this server's own
+  texts (`src/fixed-corpus.generated.ts`), is refused with a fixed text that
+  never repeats it. Breaking for hosts that relied on the environment
+  fallback.
+- Every string leaving the gateway passes the instance's redactor as the
+  last step: results, construction errors and whole stderr lines.
+- A failure reported inside the data of a successful call (a `status` of
+  400 or more, an `error` field, or a message in `errors`, `metadata` and
+  the like) keeps only its status and our own text.
 - Per-instance secret redaction replaces the process-wide registry: a
   gateway instance's token is redacted only in that instance's calls and is
   never kept by the process.
