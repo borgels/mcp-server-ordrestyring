@@ -58,6 +58,12 @@ export interface CallScope {
   readonly redactor?: SecretRedactor;
   readonly caller?: string;
   readonly requestId?: string;
+  /**
+   * The instance's own key for prepared-mutation hashes. A gateway instance
+   * never reads ORDRESTYRING_PREPARE_SECRET: its preparations are made and
+   * checked within its own calls.
+   */
+  readonly prepareSecret?: Buffer;
 }
 
 export const TOOL_PREFIX = 'ordrestyring_';
@@ -78,16 +84,8 @@ export function canonicalToolName(name: string): string {
   return lower.startsWith(TOOL_PREFIX) ? lower : `${TOOL_PREFIX}${lower}`;
 }
 
-/**
- * Check a host's policy against the known tools. Throws GatewayConfigError on
- * anything unclear. `redact` is the instance's redactor: a value quoted in an
- * error is redacted before it is cut short.
- */
-export function resolveInstancePolicy(
-  policy: InstancePolicy,
-  knownTools: readonly string[],
-  redact: (text: string) => string,
-): ResolvedInstancePolicy {
+/** Check a host's policy against the known tools. Throws GatewayConfigError on anything unclear, quoting no value. */
+export function resolveInstancePolicy(policy: InstancePolicy, knownTools: readonly string[]): ResolvedInstancePolicy {
   if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) {
     throw new GatewayConfigError('policy must be an object');
   }
@@ -102,9 +100,10 @@ export function resolveInstancePolicy(
   }
   const known = new Set(knownTools);
   const disabled = new Set<string>();
-  for (const name of policy.disabledTools ?? []) {
+  for (const [index, name] of (policy.disabledTools ?? []).entries()) {
     if (typeof name !== 'string' || !known.has(canonicalToolName(name))) {
-      throw new GatewayConfigError(`policy.disabledTools names an unknown tool: ${redact(String(name)).slice(0, 100)}`);
+      // The value is not quoted: configuration is never echoed, not even shortened.
+      throw new GatewayConfigError(`policy.disabledTools[${index}] is not a known gateway tool.`);
     }
     disabled.add(canonicalToolName(name));
   }
@@ -132,6 +131,11 @@ export function currentInstancePolicy(): ResolvedInstancePolicy | undefined {
 /** The redactor of the instance whose call is in progress, if any. */
 export function currentRedactor(): SecretRedactor | undefined {
   return callScope.getStore()?.redactor;
+}
+
+/** The prepared-mutation key of the gateway instance whose call is in progress, if any. */
+export function currentPrepareSecret(): Buffer | undefined {
+  return callScope.getStore()?.prepareSecret;
 }
 
 /** Caller and request id of the gateway call in progress, if any. */
