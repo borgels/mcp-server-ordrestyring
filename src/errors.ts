@@ -1,5 +1,7 @@
 import { redactRegisteredSecrets, truncate } from './upstream-http.js';
 
+export { MIN_SECRET_LENGTH } from './upstream-http.js';
+
 export interface OrdrestyringGraphQLErrorPayload {
   message?: string;
   type?: string;
