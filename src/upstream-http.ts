@@ -60,6 +60,18 @@ export class SecretRedactor {
     return this;
   }
 
+  /** Whether the text contains one of the secrets in any form, or any FRAGMENT_LENGTH-character piece of one. */
+  matches(text: string): boolean {
+    for (const secret of this.secrets) {
+      if (text.includes(secret)) return true;
+    }
+    if (this.fragments.size === 0) return false;
+    for (let i = 0; i + FRAGMENT_LENGTH <= text.length; i += 1) {
+      if (this.fragments.has(text.slice(i, i + FRAGMENT_LENGTH))) return true;
+    }
+    return false;
+  }
+
   /** Every secret value, and every run of text covered by a piece of one, replaced with ‹redacted›. */
   redact(value: string): string {
     let result = value;
