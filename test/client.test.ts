@@ -99,9 +99,9 @@ describe('OrdrestyringClient', () => {
   });
 
   it('redacts token material from formatted errors', () => {
-    expect(redactSecrets('Authorization: Bearer secret-test-token')).toBe('Authorization: [REDACTED]');
+    expect(redactSecrets('Authorization: Bearer secret-test-token')).toBe('Authorization: ‹redacted›');
     expect(formatUnknownError(new Error('ORDRESTYRING_API_TOKEN=secret-test-token'))).toBe(
-      'ORDRESTYRING_API_TOKEN= [REDACTED]',
+      'ORDRESTYRING_API_TOKEN= ‹redacted›',
     );
   });
 
