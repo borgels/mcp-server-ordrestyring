@@ -3,6 +3,7 @@
 // inside a successful body, and a response too deep to serialise naively. Every result text must still be JSON.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOrdrestyringGateway, type GatewayToolResult } from '../src/gateway.js';
+import { nestedFailuresAsStatus } from '../src/errors.js';
 import { mockSchema } from './schema-fixture.js';
 
 const BASE = 'https://example.test';
@@ -45,7 +46,7 @@ function expectValidJson(result: GatewayToolResult): void {
 
 describe('the threat model, through callTool', () => {
   it('redacts a numeric token and its pieces in numbers, and the text stays valid JSON', async () => {
-    const NUMERIC = '12345678';
+    const NUMERIC = '1234567890123456';
     const records: unknown[] = [];
     const answers = [Number(NUMERIC), Number(NUMERIC.slice(1, 7)), Number(`${NUMERIC}9`)];
     let call = 0;
@@ -164,7 +165,7 @@ describe('round 5 of the threat model, through callTool', () => {
 
   it('refuses a token that overlaps the redaction marker, and redacts one that looks like the old marker', async () => {
     for (const apiToken of ['‹redacted›-0123456789', 'my-redacted-value', 'xx-dacted›-yy']) {
-      expect(() => createOrdrestyringGateway({ apiToken, baseUrl: BASE, timeoutMs: 5_000 }), apiToken).toThrow(/redaction marker/);
+      expect(() => createOrdrestyringGateway({ apiToken, baseUrl: BASE, timeoutMs: 5_000 }), apiToken).toThrow(/key was refused/);
     }
     const LOOKALIKE = 'REDACTED-0123456789';
     const records: unknown[] = [];
@@ -235,5 +236,66 @@ describe('round 5 of the threat model, through callTool', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toMatch(/HTTP 500/);
     expect(JSON.stringify(result)).not.toContain('Vendor');
+  });
+});
+
+describe('round 6 of the threat model', () => {
+  function pieces(value: string): string[] {
+    const out: string[] = [];
+    for (let i = 0; i + 6 <= value.length; i += 1) out.push(value.slice(i, i + 6));
+    return out;
+  }
+
+  it('refuses tokens that collide with our own texts, without repeating them', () => {
+    for (const apiToken of ['[nested too deep]-0123456789', 'ordrestyring-mcp-0123456789', 'ORDRESTYRING_BASE_URL-0123456789']) {
+      let message = '';
+      try {
+        createOrdrestyringGateway({ apiToken, baseUrl: BASE, timeoutMs: 5_000 });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message, apiToken).toMatch(/key was refused/);
+      for (const piece of pieces(apiToken)) expect(message, piece).not.toContain(piece);
+    }
+  });
+
+  it('sends a construction error through the redactor, configuration values included', () => {
+    const HOSTLIKE = 'qz7hn4vb8lw2jx6pz9';
+    let message = '';
+    try {
+      createOrdrestyringGateway({ apiToken: HOSTLIKE, baseUrl: `http://${HOSTLIKE}.vendor.invalid/x?y=${HOSTLIKE}`, timeoutMs: 5_000 });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).not.toBe('');
+    for (const piece of pieces(HOSTLIKE)) expect(message, piece).not.toContain(piece);
+  });
+
+  it('reduces failures without an error field, by status or in a failure context', () => {
+    expect(
+      nestedFailuresAsStatus({
+        failures: [{ status: 403, message: 'Vendor diagnostic' }],
+        metadata: { status: 401, error: null, message: 'Vendor diagnostic' },
+        errors: [{ message: 'Vendor diagnostic' }],
+        rows: [{ status: 200, message: 'kept' }],
+      }),
+    ).toEqual({
+      failures: [{ status: 403, error: 'Ordrestyring reported a failure with HTTP 403.' }],
+      metadata: { status: 401, error: 'Ordrestyring reported a failure with HTTP 401.' },
+      errors: [{ error: 'Ordrestyring reported a failure.' }],
+      rows: [{ status: 200, message: 'kept' }],
+    });
+  });
+
+  it('reduces a failure reported inside the data of a successful call', async () => {
+    const gateway = createOrdrestyringGateway({
+      apiToken: 'plainvalue-4444333322',
+      baseUrl: BASE,
+      timeoutMs: 5_000,
+      fetchImpl: upstream(() => json({ data: { __typename: { status: 403, message: 'Vendor diagnostic' } } })),
+    });
+    const result = await gateway.callTool('check_connection', {});
+    expect(JSON.stringify(result)).not.toContain('Vendor');
+    expectValidJson(result);
   });
 });
