@@ -132,8 +132,18 @@ export function redactDeep(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     return redactSecrets(value);
   }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    // The string form of a primitive is checked too; a match becomes the string "[REDACTED]", so JSON stays valid.
+    const text = String(value);
+    if (redactSecrets(text) !== text) return '[REDACTED]';
+    return typeof value === 'bigint' ? text : value;
+  }
   if (typeof value !== 'object' || value === null) {
     return value;
+  }
+  const json = (value as { toJSON?: unknown }).toJSON;
+  if (typeof json === 'function') {
+    return redactDeep(json.call(value), depth + 1);
   }
   if (Array.isArray(value)) {
     return value.map(entry => redactDeep(entry, depth + 1));
@@ -141,6 +151,20 @@ export function redactDeep(value: unknown, depth = 0): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [redactSecrets(key), redactDeep(entry, depth + 1)]),
   );
+}
+
+/** Copy of parsed JSON with anything nested deeper than MAX_REDACT_DEPTH replaced, so it can be serialised safely. */
+export function limitDepth(value: unknown, depth = 0): unknown {
+  if (depth > MAX_REDACT_DEPTH) {
+    return '[nested too deep]';
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(entry => limitDepth(entry, depth + 1));
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, limitDepth(entry, depth + 1)]));
 }
 
 /**
