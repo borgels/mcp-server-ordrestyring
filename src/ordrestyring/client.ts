@@ -1,5 +1,5 @@
 import { readEnvInteger } from '../config-env.js';
-import { limitDepth, OrdrestyringGraphQLError, OrdrestyringHttpError } from '../errors.js';
+import { limitDepth, nestedFailuresAsStatus, OrdrestyringGraphQLError, OrdrestyringHttpError } from '../errors.js';
 import {
   describeUrl,
   discardBody,
@@ -73,7 +73,8 @@ export class OrdrestyringClient {
       throw new OrdrestyringGraphQLError({ errors: response.errors as never });
     }
 
-    return response.data as T;
+    // A failure reported inside the data keeps only its status and our own text.
+    return nestedFailuresAsStatus(response.data) as T;
   }
 
   async rawGraphql<T>(request: GraphQLRequest): Promise<GraphQLResponse<T>> {
