@@ -3,8 +3,10 @@
 ## 0.3.0 (2026-11-17)
 
 The gateway entry point (`./gateway`) in the shape of `mcp-server-template`,
-so one process can serve several tenants. The MCP server (stdio and HTTP) is
-unchanged and still reads its configuration from the environment.
+so one process can serve several tenants. The MCP server (stdio and HTTP)
+still reads its configuration from the environment; its errors change as
+described below (no Ordrestyring text). The README has a threat model: what
+is guaranteed about the token and the residual risk.
 
 - `createOrdrestyringGateway` requires `apiToken` and never reads
   `ORDRESTYRING_API_TOKEN` or `ORDRESTYRING_BASE_URL`; the base URL defaults
@@ -35,9 +37,14 @@ unchanged and still reads its configuration from the environment.
   error code; configuration errors do not quote the rejected value. Failed
   sections of a combined read (`get_case_health` and the like) use the same
   texts.
-- Every result a gateway instance returns is redacted with its token after
-  parsing and before serialising: the handler's text is rebuilt from the
-  redacted data, keys included. The redactor removes the exact token, its
+- No Ordrestyring text in other errors either (also for the MCP server): an
+  error while reading a response is a fixed text, and schema problems no
+  longer name the schema's types, fields or arguments.
+- Every result a gateway instance returns is redacted, best-effort, with its
+  token after parsing and before serialising: the handler's text is rebuilt
+  from the redacted data, keys included, and numbers and booleans whose
+  string form matches become the string `"[REDACTED]"`, so the text stays
+  valid JSON. Responses are depth-limited when they are parsed. The redactor removes the exact token, its
   URL- and JSON-encoded forms and any piece of it of 6 characters or more.
   A policy that is an array is refused.
 - A gateway instance hashes prepared mutations with its own random key and
