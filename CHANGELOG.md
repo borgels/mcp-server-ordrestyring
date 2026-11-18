@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 (2026-11-18)
+
+- Gateway results: a result built from a handler answer that is not an MCP
+  result (the summary path, `Ordrestyring gateway result.`) now has its
+  `structuredContent` as compact JSON in the text block after the summary
+  (`summary\n\n{...}`), as the MCP specification recommends for tools that
+  return structured content. Before, that text held only the summary, so a
+  client that reads only the text got no data. The JSON is the redacted
+  data, exactly `structuredContent`, and the sink check covers it.
+- Unchanged: the usual path, where the handler answers with JSON text,
+  already returned the redacted data as JSON text equal to
+  `structuredContent`. Error results are unchanged.
+
 ## 0.3.0 (2026-11-17)
 
 The gateway entry point (`./gateway`) in the shape of `mcp-server-template`,
