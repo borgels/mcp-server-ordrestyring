@@ -475,10 +475,16 @@ function normalizeResult(result: unknown, redactor: SecretRedactor): GatewayTool
   };
 }
 
+/**
+ * The summary, then the same (already redacted) data as compact JSON in the text block, as the MCP spec asks of a
+ * tool that returns structured content: many clients read only the text. The text holds exactly
+ * `structuredContent`, and the sink check in callTool covers it.
+ */
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
+  const data = toGatewayJson(structuredContent);
   return {
-    content: [{ type: 'text', text }],
-    structuredContent: toGatewayJson(structuredContent),
+    content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data)}` }],
+    structuredContent: data,
   };
 }
 
