@@ -397,15 +397,24 @@ the environment: prepared-mutation hashes use a random key of the instance
 (not `ORDRESTYRING_PREPARE_SECRET`). Without `timeoutMs` the timeout is read
 from `ORDRESTYRING_TIMEOUT_MS`; it is a limit, not a credential or policy.
 
-First-wedge gateway tools:
+Gateway tools:
 
 - `check_connection`
 - `search_cases`
 - `get_case_health`
 - `find_billable_cases`
 - `get_invoice_readiness`
+- `search_customers`, `search_products`, `search_hour_types`
+- `list_case_time_entries`, `list_case_materials`
 - `create_customer` (disabled by default)
+- `create_case`, `create_case_activity` (a note on a case), `create_offer`,
+  `convert_offer_to_case`, `create_case_material` (disabled by default;
+  writes, none of them deletes anything)
 - `delete_products` (disabled by default, destructive)
+
+Registering hours is not in the gateway: the API's mutations as this server
+knows them (`createHourType`, `updateHourType`) set up hour types, and none
+registers hours on a case. Hours are read with `list_case_time_entries`.
 
 The gateway reads credentials only from the factory options, never from the
 environment or from tool arguments. Without a host policy, write tools remain

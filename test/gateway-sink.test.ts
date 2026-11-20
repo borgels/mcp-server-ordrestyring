@@ -114,7 +114,8 @@ describe('the sink check', () => {
     };
     const filler = (n: number) => Array.from({ length: n }, () => String.fromCharCode(0x30 + random(43))).join('');
     let admitted = 0;
-    for (let round = 0; round < 40; round += 1) {
+    // Most windows come from the tool list and are refused; enough rounds that some tokens are admitted.
+    for (let round = 0; round < 200; round += 1) {
       const text = texts[random(texts.length)]!;
       const start = random(text.length - 5);
       const window = text.slice(start, start + 6);
