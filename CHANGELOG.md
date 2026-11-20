@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 (2026-11-20)
+
+- Gateway (`./gateway`): the project manager's everyday work (#48). New
+  write tools, disabled by default and run only under `enableWrites`:
+  `create_case`, `create_case_activity` (a note on a case), `create_offer`,
+  `convert_offer_to_case` and `create_case_material`. None deletes. New reads
+  they need: `search_customers`, `search_products`, `search_hour_types`,
+  `list_case_time_entries` and `list_case_materials`. No tool is broad.
+- Registering hours is not added: no mutation that registers hours on a case
+  is known (only hour types can be created and updated).
+
 ## 0.3.1 (2026-11-18)
 
 - Gateway results: a result built from a handler answer that is not an MCP

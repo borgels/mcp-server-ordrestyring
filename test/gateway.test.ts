@@ -49,7 +49,17 @@ describe('Ordrestyring gateway surface', () => {
       ['get_case_health', 'read', true],
       ['find_billable_cases', 'read', true],
       ['get_invoice_readiness', 'read', true],
+      ['search_customers', 'read', true],
+      ['search_products', 'read', true],
+      ['search_hour_types', 'read', true],
+      ['list_case_time_entries', 'read', true],
+      ['list_case_materials', 'read', true],
       ['create_customer', 'write', false],
+      ['create_case', 'write', false],
+      ['create_case_activity', 'write', false],
+      ['create_offer', 'write', false],
+      ['convert_offer_to_case', 'write', false],
+      ['create_case_material', 'write', false],
       ['delete_products', 'destructive', false],
     ]);
   });
@@ -208,7 +218,7 @@ describe('Ordrestyring gateway policy', () => {
 
     expect(gateway.tools.map(tool => tool.name)).not.toContain('check_connection');
     expect(gateway.tools.map(tool => tool.name)).not.toContain('delete_products');
-    expect(gateway.tools).toHaveLength(5);
+    expect(gateway.tools).toHaveLength(15);
     const result = await gateway.callTool('check_connection');
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('disabled on this instance by the embedding host');

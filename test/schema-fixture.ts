@@ -49,6 +49,12 @@ export function mockSchema() {
       objectType('Mutation', [
         field('createCase', named('Case'), [arg('input', nonNull(named('CreateCaseInput')))]),
         field('createOffer', named('Offer'), [arg('input', nonNull(named('CreateOfferInput')))]),
+        field('createCaseActivity', named('CaseActivity'), [arg('input', nonNull(named('CreateCaseActivityInput')))]),
+        field('createCaseMaterial', named('CaseMaterial'), [arg('input', nonNull(named('CreateCaseMaterialInput')))]),
+        field('convertOfferToCase', named('Case'), [
+          arg('id', nonNull(named('Int'))),
+          arg('options', named('ConvertOfferToCaseOptionsInput')),
+        ]),
         field('createProduct', named('Product'), [arg('input', nonNull(named('CreateProductInput')))]),
         field('updateProduct', named('Product'), [
           arg('id', nonNull(named('Int'))),
@@ -135,6 +141,7 @@ export function mockSchema() {
         field('product', named('Product')),
       ]),
       objectType('Customer', [field('id', named('Int')), field('name', named('String'))]),
+      objectType('CaseActivity', [field('id', named('Int')), field('description', named('String'))]),
       objectType('Offer', [
         field('id', named('Int')),
         field('number', named('String')),
@@ -156,6 +163,17 @@ export function mockSchema() {
         inputField('description', nonNull(named('String'))),
         inputField('statusId', nonNull(named('Int'))),
       ]),
+      inputType('CreateCaseActivityInput', [
+        inputField('caseId', nonNull(named('Int'))),
+        inputField('description', nonNull(named('String'))),
+      ]),
+      inputType('CreateCaseMaterialInput', [
+        inputField('caseId', nonNull(named('Int'))),
+        inputField('description', named('String')),
+        inputField('quantity', nonNull(named('Float'))),
+        inputField('type', named('AddedBy')),
+      ]),
+      inputType('ConvertOfferToCaseOptionsInput', [inputField('statusId', named('Int'))]),
       inputType('CreateOfferInput', [
         inputField('customerId', nonNull(named('Int'))),
         inputField('description', named('String')),
