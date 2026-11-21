@@ -4,6 +4,7 @@ import {
   nestedFailuresAsStatus,
   OrdrestyringGraphQLError,
   OrdrestyringHttpError,
+  OrdrestyringRedirectError,
   requestIdFrom,
 } from '../errors.js';
 import {
@@ -121,7 +122,10 @@ export class OrdrestyringClient {
 
     if (isRedirect(response.status)) {
       await discardBody(response);
-      throw new Error(redirectRefusedMessage('Ordrestyring GraphQL', response, 'POST', url));
+      throw new OrdrestyringRedirectError(redirectRefusedMessage('Ordrestyring GraphQL', response, 'POST', url), {
+        status: response.status,
+        requestId: requestIdFrom(response.headers),
+      });
     }
 
     if (!response.ok) {

@@ -112,6 +112,23 @@ export class OrdrestyringGraphQLError extends Error {
 }
 
 /**
+ * A redirect from Ordrestyring, refused (it is never followed): our own text, the status of the answer and its
+ * request id, nothing else of the response.
+ */
+export class OrdrestyringRedirectError extends Error {
+  readonly status: number;
+  /** Ordrestyring's own id for the request, when a response header gives one as a UUID or hex id. */
+  readonly requestId?: string;
+
+  constructor(message: string, input: { status: number; requestId?: string }) {
+    super(message);
+    this.name = 'OrdrestyringRedirectError';
+    this.status = input.status;
+    this.requestId = vendorRequestId(input.requestId);
+  }
+}
+
+/**
  * Response headers that carry the vendor's own id for a request, most specific first. Ordrestyring documents no
  * header of its own, so this is the common list.
  */
@@ -164,11 +181,18 @@ export interface FailureMetadata {
 }
 
 /**
- * The failure metadata of an error: an HTTP error from Ordrestyring gives its status and request id, and GraphQL
- * errors give the status of the answer that carried them (usually 200) and its request id.
+ * The failure metadata of an error: an HTTP error from Ordrestyring (a refused redirect included) gives its status
+ * and request id, and GraphQL errors give the status of the answer that carried them (usually 200) and its request
+ * id.
  */
 export function failureMetadata(error: unknown): FailureMetadata | undefined {
-  if (!(error instanceof OrdrestyringHttpError) && !(error instanceof OrdrestyringGraphQLError)) return undefined;
+  if (
+    !(error instanceof OrdrestyringHttpError) &&
+    !(error instanceof OrdrestyringRedirectError) &&
+    !(error instanceof OrdrestyringGraphQLError)
+  ) {
+    return undefined;
+  }
   const status = error.status;
   if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599) return undefined;
   const requestId = vendorRequestId(error.requestId);

@@ -412,6 +412,7 @@ export const FIXED_CORPUS: readonly string[] = [
   "OrdrestyringMcpSearchProducts",
   "OrdrestyringMcpSummarizeTime",
   "OrdrestyringMcpUnbilledMaterialsReport",
+  "OrdrestyringRedirectError",
   "Origin",
   "Origin not allowed",
   "POST, OPTIONS",

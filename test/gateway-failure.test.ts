@@ -112,6 +112,17 @@ describe('gateway error results', () => {
     expect(serialised).not.toContain('E_NOPE');
   });
 
+  it('carry the status and request id of a refused redirect', async () => {
+    for (const status of [301, 302, 307, 308]) {
+      const result = await gatewayAnswering(status, { 'x-request-id': UUID, location: 'https://elsewhere.example.test/' }).callTool(
+        'check_connection',
+      );
+      expect(result.isError).toBe(true);
+      expect(result.failure).toEqual({ httpStatus: status, requestId: UUID });
+      expect(JSON.stringify(result)).not.toContain('elsewhere');
+    }
+  });
+
   it('carry the status alone when the request id is not in the form of one', async () => {
     const result = await gatewayAnswering(422, { 'x-request-id': 'Jane Doe <jane@example.com>' }).callTool(
       'check_connection',

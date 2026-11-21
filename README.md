@@ -372,7 +372,8 @@ The gateway exports:
 - `callTool(name, input, { caller, requestId })`: input is validated before
   anything is sent, and unknown fields are refused. `caller` and `requestId`
   go into the audit records of the call. An error result has only its text,
-  and, when Ordrestyring answered with an HTTP error or with GraphQL errors,
+  and, when Ordrestyring answered with an HTTP error (a refused redirect
+  included) or with GraphQL errors,
   `failure: { httpStatus, requestId? }`: the status of the answer (for
   GraphQL errors usually 200), and Ordrestyring's request id from a response
   header (`REQUEST_ID_HEADERS` in `src/errors.ts`) only when it is a hex id

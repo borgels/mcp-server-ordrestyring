@@ -3,7 +3,8 @@
 ## 0.5.0 (2026-11-21)
 
 - Gateway error results carry failure metadata: when Ordrestyring answered
-  with an HTTP error, or with GraphQL errors, the result has `failure: {
+  with an HTTP error (a refused redirect included), or with GraphQL errors,
+  the result has `failure: {
   httpStatus, requestId? }`, so a host can count failures by status without
   reading their text. For GraphQL errors `httpStatus` is the status of the
   answer that carried them (usually 200). `requestId` is the vendor's own id
