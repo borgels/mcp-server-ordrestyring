@@ -1,5 +1,12 @@
 import { readEnvInteger } from '../config-env.js';
-import { limitDepth, nestedFailuresAsStatus, OrdrestyringGraphQLError, OrdrestyringHttpError } from '../errors.js';
+import {
+  limitDepth,
+  nestedFailuresAsStatus,
+  OrdrestyringGraphQLError,
+  OrdrestyringHttpError,
+  OrdrestyringRedirectError,
+  requestIdFrom,
+} from '../errors.js';
 import {
   describeUrl,
   discardBody,
@@ -67,10 +74,11 @@ export class OrdrestyringClient {
   }
 
   async graphql<T>(request: GraphQLRequest): Promise<T> {
-    const response = await this.rawGraphql<T>(request);
+    const { body: response, status, requestId } = await this.send<T>(request);
 
     if (response.errors?.length) {
-      throw new OrdrestyringGraphQLError({ errors: response.errors as never });
+      // The status of the answer and its request id go with the count: metadata only, never the errors' text.
+      throw new OrdrestyringGraphQLError({ errors: response.errors as never, status, requestId });
     }
 
     // A failure reported inside the data keeps only its status and our own text.
@@ -78,6 +86,12 @@ export class OrdrestyringClient {
   }
 
   async rawGraphql<T>(request: GraphQLRequest): Promise<GraphQLResponse<T>> {
+    return (await this.send<T>(request)).body;
+  }
+
+  private async send<T>(
+    request: GraphQLRequest,
+  ): Promise<{ body: GraphQLResponse<T>; status: number; requestId?: string }> {
     if (!this.apiToken) {
       throw new Error('Missing ORDRESTYRING_API_TOKEN. Set it in the MCP server environment.');
     }
@@ -108,7 +122,10 @@ export class OrdrestyringClient {
 
     if (isRedirect(response.status)) {
       await discardBody(response);
-      throw new Error(redirectRefusedMessage('Ordrestyring GraphQL', response, 'POST', url));
+      throw new OrdrestyringRedirectError(redirectRefusedMessage('Ordrestyring GraphQL', response, 'POST', url), {
+        status: response.status,
+        requestId: requestIdFrom(response.headers),
+      });
     }
 
     if (!response.ok) {
@@ -120,10 +137,12 @@ export class OrdrestyringClient {
         retryAfter: response.headers.get('retry-after') ?? undefined,
         rateLimitLimit: response.headers.get('x-ratelimit-limit') ?? undefined,
         rateLimitRemaining: response.headers.get('x-ratelimit-remaining') ?? undefined,
+        requestId: requestIdFrom(response.headers),
       });
     }
 
-    return (await readResponseBody(response)) as GraphQLResponse<T>;
+    const body = (await readResponseBody(response)) as GraphQLResponse<T>;
+    return { body, status: response.status, requestId: requestIdFrom(response.headers) };
   }
 }
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0 (2026-11-21)
+
+- Gateway error results carry failure metadata: when Ordrestyring answered
+  with an HTTP error (a refused redirect included), or with GraphQL errors,
+  the result has `failure: {
+  httpStatus, requestId? }`, so a host can count failures by status without
+  reading their text. For GraphQL errors `httpStatus` is the status of the
+  answer that carried them (usually 200). `requestId` is the vendor's own id
+  from a response header (`REQUEST_ID_HEADERS`; Ordrestyring documents none,
+  so the common list), kept only when it is a hex id of 8 to 64 characters
+  (one run of hex digits, or groups of four or more joined by single hyphens,
+  as in a UUID) and does not hold the shape of a personal number. It is
+  checked again after redaction, so an id that shared a piece with the token
+  is dropped. Never the body, the vendor's error code or message. The shared
+  helpers are in `src/errors.ts` (`vendorRequestId`, `requestIdFrom`,
+  `failureMetadata`).
+
 ## 0.4.0 (2026-11-20)
 
 - Gateway (`./gateway`): the project manager's everyday work (#48). New
